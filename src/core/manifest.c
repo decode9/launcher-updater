@@ -26,7 +26,12 @@ int manifest_path_is_reserved(const char *path, const char *self_exe)
     static const char state_dir[] = MANIFEST_STATE_DIR;
     size_t i;
     if (manifest_path_eq(path, "launcher.json") || manifest_path_eq(path, "launcher.log")) return 1;
-    if (self_exe && self_exe[0] && manifest_path_eq(path, self_exe)) return 1;
+    if (self_exe && self_exe[0]) {
+        size_t n = 0;
+        if (manifest_path_eq(path, self_exe)) return 1;
+        while (self_exe[n] && path[n] && lower(path[n]) == lower(self_exe[n])) n++;
+        if (!self_exe[n] && manifest_path_eq(path + n, ".new")) return 1; /* the self-update file */
+    }
     for (i = 0; state_dir[i]; i++)
         if (lower(path[i]) != state_dir[i]) return 0;
     return path[i] == 0 || path[i] == '/';

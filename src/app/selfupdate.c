@@ -72,9 +72,13 @@ static int signer_accepted(void)
     next = trust_check(g_new, g_new_subject, sizeof g_new_subject);
     log_trust("running", own, g_own_subject);
     log_trust("new", next, g_new_subject);
+    /* Unsigned build: the SHA-256 from the pinned server is the only check (as for any blob).
+     * Signed build: the new exe must verify too and come from the same signer. If our own
+     * signature can't be verified (revoked, tampered, or Wine without chain building) the
+     * update is refused: we keep running the current version. */
     if (own == TRUST_UNSIGNED) return 1;
-    if (next == TRUST_UNSIGNED || !g_own_subject[0] || !str_eq(g_own_subject, g_new_subject)) return 0;
-    return own == TRUST_INVALID || next == TRUST_VALID;
+    if (own != TRUST_VALID || next != TRUST_VALID) return 0;
+    return g_own_subject[0] && str_eq(g_own_subject, g_new_subject);
 }
 
 int selfupdate_start(void)

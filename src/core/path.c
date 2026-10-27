@@ -29,10 +29,13 @@ static int is_device_name(const char *s, size_t n)
 
 static int component_ok(const char *s, size_t n)
 {
+    size_t i;
     if (n == 0) return 0;                               /* "a//b", leading or trailing '/' */
     if (n == 1 && s[0] == '.') return 0;
     if (n == 2 && s[0] == '.' && s[1] == '.') return 0;
     if (s[n - 1] == '.' || s[n - 1] == ' ') return 0;
+    for (i = 0; i + 1 < n; i++)                         /* 8.3 short-name alias ("LAUNCH~1.EXE") */
+        if (s[i] == '~' && s[i + 1] >= '0' && s[i + 1] <= '9') return 0;
     return !is_device_name(s, n);
 }
 

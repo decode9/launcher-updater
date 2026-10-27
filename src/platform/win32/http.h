@@ -26,6 +26,7 @@ typedef struct {
     const char *host;
     unsigned port;
     const uint8_t *pin; /* SHA256_BYTES */
+    uint64_t max_body;  /* 0 = no limit; a larger Content-Length is refused before any byte is read */
 } http_target;
 
 typedef int (*http_sink)(void *user, const uint8_t *data, size_t size);
@@ -42,7 +43,8 @@ typedef enum {
     HTTP_ERR_NO_LENGTH,   /* 200/206 without Content-Length */
     HTTP_ERR_RANGE,       /* 206 for another range than asked */
     HTTP_ERR_TRUNCATED,
-    HTTP_ERR_ABORTED
+    HTTP_ERR_ABORTED,
+    HTTP_ERR_TOO_LARGE    /* Content-Length above target->max_body */
 } http_error;
 
 http_error http_get(const http_target *target, const char *path, const http_range *range, http_head *head,

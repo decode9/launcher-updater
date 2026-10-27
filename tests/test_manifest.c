@@ -54,7 +54,9 @@ TEST(unsafe_or_reserved_paths_reject_everything)
 {
     static const char *const bad_paths[] = {"../x", "/abs", "a//b", "C:x", "a\\\\b", "a/./b", "CON", "nul.txt",
                                             "dir/", "x.", "launcher.json", "LAUNCHER.EXE", "launcher.log",
-                                            ".launcher/state.json", ".LAUNCHER", ""};
+                                            ".launcher/state.json", ".LAUNCHER", "",
+                                            "LAUNCH~1.EXE", "dir/PROGRA~2/x", "launcher.exe.new",
+                                            "Launcher.EXE.NEW"};
     size_t i;
     for (i = 0; i < sizeof bad_paths / sizeof bad_paths[0]; i++) {
         if (file_op(bad_paths[i]) != MANIFEST_ERR_PATH) fprintf(stderr, "accepted: %s\n", bad_paths[i]);
@@ -62,6 +64,8 @@ TEST(unsafe_or_reserved_paths_reject_everything)
         CHECK_EQ_U64(m.op_count, 0);
     }
     CHECK(file_op(".launcherx/a") == MANIFEST_OK);
+    CHECK(file_op("a~b/c~.txt") == MANIFEST_OK); /* "~" alone is fine; only "~<digit>" aliases */
+    CHECK(file_op("launcher.exe.new2") == MANIFEST_OK);
     /* One bad path among good ones rejects the whole manifest. */
     CHECK(parse_ops("{\"op\":\"line\",\"path\":\"ok.ini\",\"prefix\":\"a\",\"line\":\"b\"},"
                     "{\"op\":\"line\",\"path\":\"../bad.ini\",\"prefix\":\"a\",\"line\":\"b\"}") == MANIFEST_ERR_PATH);

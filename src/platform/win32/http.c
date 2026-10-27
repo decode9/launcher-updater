@@ -87,6 +87,7 @@ static http_error exchange(const http_target *t, const char *path, const http_ra
     if (head->status != 200 && head->status != 206) return HTTP_OK;
     if (!head->has_length) return HTTP_ERR_NO_LENGTH;
     if (!range_matches(range, head)) return HTTP_ERR_RANGE;
+    if (t->max_body && head->content_length > t->max_body) return HTTP_ERR_TOO_LARGE;
     return stream_body(head, head_len, have, sink, user);
 }
 
@@ -111,6 +112,7 @@ const char *http_error_text(http_error error)
     case HTTP_ERR_HEAD: return "malformed response head";
     case HTTP_ERR_NO_LENGTH: return "response without Content-Length";
     case HTTP_ERR_RANGE: return "response for another range";
+    case HTTP_ERR_TOO_LARGE: return "response larger than expected";
     case HTTP_ERR_TRUNCATED: return "response body truncated";
     case HTTP_ERR_ABORTED: return "download aborted";
     }

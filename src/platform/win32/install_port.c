@@ -118,7 +118,9 @@ static install_net_result p_fetch(void *user, const uint8_t sha256[SHA256_BYTES]
     range.first = offset;
     range.last = offset + length - 1;
     range.open_end = 0;
+    target.max_body = length; /* a server can't stream more than the chunk asked for into a file */
     e = http_get(&target, request_path, offset == 0 && length == blob_size ? 0 : &range, &head, sink, sink_user);
+    target.max_body = 0;
     if (e == HTTP_ERR_ABORTED) return INSTALL_NET_ABORTED;
     if (e != HTTP_OK || (head.status != 200 && head.status != 206) || head.content_length != length)
         return INSTALL_NET_FAILED;
@@ -133,8 +135,12 @@ int install_port_fetch_whole(const uint8_t sha256[SHA256_BYTES], install_sink si
     sb_add(&sb, blob_host[0] ? blob_prefix : "/v1/blob");
     sb_add_char(&sb, '/');
     sb_add_hex(&sb, sha256, SHA256_BYTES);
-    if (!sb.ok || http_get(&target, request_path, 0, &head, sink, sink_user) != HTTP_OK || head.status != 200)
+    target.max_body = INSTALL_PORT_WHOLE_MAX;
+    if (!sb.ok || http_get(&target, request_path, 0, &head, sink, sink_user) != HTTP_OK || head.status != 200) {
+        target.max_body = 0;
         return 0;
+    }
+    target.max_body = 0;
     *size = head.content_length;
     return 1;
 }

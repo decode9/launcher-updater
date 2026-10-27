@@ -7,6 +7,23 @@ heading matches the tag as the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-10-27
+
+### Security
+
+- A blob response larger than the requested chunk is refused before it is written to disk;
+  blobs of unknown size (theme images, fonts) are capped at 8 MiB.
+- Manifest paths with 8.3 short-name aliases (`~` + digit) and `<exe>.new` are rejected.
+- Self-update fails closed for signed builds: if the running executable's signature does not
+  verify, no update is installed; the new executable must verify and have the same signer.
+
+### Fixed
+
+- A user cancelling an install is logged as information, not as an error.
+- The status log no longer prints a countdown when the server is already open.
+- An interrupted install shows "Play resumes it" (theme key `status.resume`) instead of
+  "an update is available".
+
 ## [0.1.0] - 2026-10-27
 
 ### Added

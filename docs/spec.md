@@ -88,8 +88,13 @@ from `launcher.json`.
   A `file` op must be the first op on its path, a path has at most one `patch`, and nothing may
   follow the `patch` on the same path (the journal undoes exactly one patch per file); the
   launcher rejects a manifest that breaks this. Paths are compared without ASCII case.
-- **Reserved paths**: besides the executable and `launcher.json`, `launcher.log` and anything
-  under `.launcher/` (the launcher's state folder) are rejected.
+- **Reserved paths**: besides the executable and `launcher.json`, `<exe>.new` (the self-update
+  file), `launcher.log` and anything under `.launcher/` (the launcher's state folder) are
+  rejected. A path component with an 8.3 short-name alias (`~` followed by a digit, as in
+  `LAUNCH~1.EXE`) is rejected too, so a short name can't reach a reserved file.
+- **Download size**: a blob response whose `Content-Length` is larger than the chunk asked for
+  is refused before any byte is written (blobs of unknown size, such as theme images, are
+  capped at 8 MiB).
 - **Releases from the base**: when the version changes, the launcher undoes its journals (back
   to the base) and applies the new manifest in full.
 - **Journal**: before appending, the base size is saved; before each in-place write, the old
@@ -141,9 +146,10 @@ When `launcher.version` in `/v1/status` is greater (X.Y.Z) than the running vers
 2. Write it as `<exe>.new` next to the executable (through `.part` and a rename).
 3. Signer: if the running executable has an Authenticode signature that Windows accepts, the
    new one must also be accepted and have the same signer subject. If the running one is
-   signed but does not verify on this machine, the new one must still be signed by the same
-   subject. If the running one is unsigned (beta builds), the SHA-256 is the only check.
-   (Wine implements `WinVerifyTrust` only partly; there, signed files may not verify.)
+   signed but its signature does not verify on this machine (revoked, tampered, or Wine,
+   whose `WinVerifyTrust` does not build chains), the update is refused and the current
+   version keeps running. If the running one is unsigned (beta builds), the SHA-256 from the
+   pinned server is the only check.
 4. Start `<exe>.new --swap <pid>` and exit.
 5. The new process waits for `<pid>` to exit (up to 60 s), renames itself over `<exe>`
    (40 attempts, 250 ms apart), starts `<exe> --skip-update` and exits. `--skip-update` limits

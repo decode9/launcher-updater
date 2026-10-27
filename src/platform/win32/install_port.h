@@ -19,6 +19,9 @@ int install_port_init(const char *root, const launcher_config *cfg, install_fs *
 /* GET of a whole blob whose size is not known in advance (theme and news images), from the same
  * host as the engine's blobs. *size receives the length; the caller checks the SHA-256.
  * Returns 1 on a complete 200 response. */
+/* Upper bound for a blob fetched without a known size (theme images, fonts, news): 8 MiB, as the UI buffer. */
+#define INSTALL_PORT_WHOLE_MAX (8u * 1024u * 1024u)
+
 int install_port_fetch_whole(const uint8_t sha256[SHA256_BYTES], install_sink sink, void *sink_user, uint64_t *size);
 
 #endif

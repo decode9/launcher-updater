@@ -129,7 +129,7 @@ static void log_status(void)
 
 int app_fetch_status(void)
 {
-    http_target target = {app_config.server, app_config.port, app_config.fingerprint};
+    http_target target = {app_config.server, app_config.port, app_config.fingerprint, 0};
     memory_sink sink = {status_text, sizeof status_text, 0};
     http_head head;
     http_error e = http_get(&target, "/v1/status", 0, &head, to_memory, &sink);
