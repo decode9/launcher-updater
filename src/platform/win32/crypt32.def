@@ -1,0 +1,9 @@
+LIBRARY crypt32.dll
+EXPORTS
+    CertFreeCertificateContext@4
+    CryptQueryObject@44
+    CryptMsgGetParam@20
+    CryptMsgClose@4
+    CertCloseStore@8
+    CertFindCertificateInStore@24
+    CertGetNameStringW@24

@@ -1,0 +1,23 @@
+LIBRARY kernel32.dll
+EXPORTS
+    GetModuleFileNameW@12
+    GetCommandLineW@0
+    ExitProcess@4
+    GetLastError@0
+    CreateFileW@28
+    ReadFile@20
+    WriteFile@20
+    GetFileSizeEx@8
+    SetFilePointerEx@20
+    FlushFileBuffers@4
+    CloseHandle@4
+    GetSystemTime@4
+    GetTickCount@0
+    MultiByteToWideChar@24
+    WideCharToMultiByte@32
+    GetLocaleInfoW@16
+    SetEndOfFile@4
+    MoveFileExW@12
+    CreateDirectoryW@8
+    DeleteFileW@4
+    GetDiskFreeSpaceExW@16

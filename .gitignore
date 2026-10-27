@@ -1,0 +1,8 @@
+build/
+*.obj
+*.lib
+*.pem
+fingerprint.txt
+launcher.log
+__pycache__/
+examples/dev-server/example-root/generated/

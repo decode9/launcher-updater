@@ -1,0 +1,5 @@
+LIBRARY kernel32.dll
+EXPORTS
+    FindFirstFileW@8
+    FindNextFileW@8
+    FindClose@4

@@ -1,0 +1,9 @@
+LIBRARY gdi32.dll
+EXPORTS
+    CreateCompatibleDC@4
+    CreateCompatibleBitmap@12
+    SelectObject@8
+    DeleteObject@4
+    DeleteDC@4
+    BitBlt@36
+    CreateRoundRectRgn@24

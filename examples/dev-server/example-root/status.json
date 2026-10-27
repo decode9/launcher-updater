@@ -1,0 +1,7 @@
+{
+  "opens_at": "2030-01-01T12:00:00Z",
+  "news": [
+    {"title": {"en": "Example Game beta opens soon", "es": "La beta de Example Game abre pronto"},
+     "link": "https://example.com/news/beta"}
+  ]
+}

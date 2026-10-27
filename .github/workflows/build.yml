@@ -1,0 +1,38 @@
+name: build
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install toolchain
+        run: sudo apt-get update && sudo apt-get install -y clang lld llvm
+
+      - name: Build
+        run: ./build.sh
+
+      - name: Unit tests
+        run: tests/run.sh
+
+      - name: Validate example themes against the schema
+        run: |
+          python3 -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/pip" install --quiet jsonschema
+          REQUIRE_JSONSCHEMA=1 "$RUNNER_TEMP/venv/bin/python" tests/test_theme_schema.py
+
+      - name: Denylist
+        run: tools/check-denylist.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: launcher-exe
+          path: build/launcher.exe
+          if-no-files-found: error

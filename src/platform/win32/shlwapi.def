@@ -1,0 +1,3 @@
+LIBRARY shlwapi.dll
+EXPORTS
+    SHCreateMemStream@8 @12 NONAME

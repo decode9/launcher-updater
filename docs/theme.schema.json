@@ -1,0 +1,169 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/launcher/theme.schema.json",
+  "title": "Launcher theme",
+  "description": "theme.json, schema_version 1. See docs/theming.md. Extra properties are allowed everywhere so themes can grow: a launcher ignores what it does not know.",
+  "type": "object",
+  "required": ["schema_version"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "min_launcher_version": {"$ref": "#/$defs/version"},
+    "window": {"$ref": "#/$defs/window"},
+    "tokens": {
+      "description": "Colour tokens. Names must not start with '#'; values are literal colours (a token never refers to another token). The launcher reads up to 32.",
+      "type": "object",
+      "propertyNames": {"pattern": "^[^#]", "maxLength": 31},
+      "additionalProperties": {"$ref": "#/$defs/hexColor"}
+    },
+    "fonts": {
+      "description": "Named fonts. 'body' is the default font. The launcher reads up to 8.",
+      "type": "object",
+      "propertyNames": {"maxLength": 31},
+      "additionalProperties": {"$ref": "#/$defs/font"}
+    },
+    "strings": {
+      "description": "Translated strings: language tag -> key -> text. Up to 8 languages and 128 strings per language.",
+      "type": "object",
+      "propertyNames": {"minLength": 1, "maxLength": 31},
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": {"type": "string"}
+      }
+    },
+    "elements": {
+      "description": "Drawn in order (first at the back). Up to 64 elements.",
+      "type": "array",
+      "items": {"$ref": "#/$defs/element"}
+    }
+  },
+  "$defs": {
+    "version": {"type": "string", "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"},
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "hexColor": {"type": "string", "pattern": "^#([0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})$"},
+    "color": {
+      "description": "A token name, #RRGGBB or #RRGGBBAA.",
+      "type": "string",
+      "anyOf": [
+        {"$ref": "#/$defs/hexColor"},
+        {"pattern": "^[^#]", "maxLength": 31}
+      ]
+    },
+    "uint": {"type": "integer", "minimum": 0},
+    "window": {
+      "type": "object",
+      "properties": {
+        "width": {"type": "integer", "minimum": 64, "maximum": 4096, "default": 960},
+        "height": {"type": "integer", "minimum": 64, "maximum": 4096, "default": 600},
+        "background": {
+          "oneOf": [
+            {"$ref": "#/$defs/color"},
+            {
+              "type": "object",
+              "properties": {
+                "image": {"oneOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]},
+                "color": {"$ref": "#/$defs/color"}
+              }
+            }
+          ]
+        },
+        "radius": {"type": "integer", "minimum": 0, "maximum": 2048, "default": 0},
+        "draggable": {"type": "boolean", "default": true},
+        "title": {
+          "description": "Window title: per language, or one string for every language.",
+          "oneOf": [
+            {"type": "string"},
+            {"type": "object", "additionalProperties": {"type": "string"}}
+          ]
+        }
+      }
+    },
+    "font": {
+      "type": "object",
+      "properties": {
+        "family": {"type": "string"},
+        "size": {"type": "integer", "minimum": 6, "maximum": 200, "default": 14},
+        "weight": {"type": "integer", "minimum": 100, "maximum": 900, "default": 400},
+        "file": {"oneOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]}
+      }
+    },
+    "rect": {
+      "description": "[x, y, width, height] in window pixels; clipped to the window.",
+      "type": "array",
+      "prefixItems": [
+        {"type": "integer", "minimum": 0, "maximum": 65535},
+        {"type": "integer", "minimum": 0, "maximum": 65535},
+        {"type": "integer", "minimum": 1, "maximum": 65535},
+        {"type": "integer", "minimum": 1, "maximum": 65535}
+      ],
+      "minItems": 4,
+      "maxItems": 4
+    },
+    "launcherState": {"enum": ["checking", "locked", "ready", "installing", "error"]},
+    "styleState": {
+      "description": "Style of one interaction state. hover, pressed and disabled inherit every field they omit from normal.",
+      "type": "object",
+      "properties": {
+        "fill": {"$ref": "#/$defs/color"},
+        "color": {"$ref": "#/$defs/color"},
+        "border": {"$ref": "#/$defs/color"},
+        "border_width": {"type": "integer", "minimum": 0, "maximum": 64},
+        "radius": {"type": "integer", "minimum": 0, "maximum": 2048},
+        "track": {"$ref": "#/$defs/color"},
+        "image": {"oneOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]},
+        "font": {"type": "string"}
+      }
+    },
+    "element": {
+      "type": "object",
+      "required": ["type", "rect"],
+      "properties": {
+        "type": {
+          "description": "image, text, news, progress, countdown, status, button. Other values are skipped by launchers that do not know them.",
+          "type": "string"
+        },
+        "rect": {"$ref": "#/$defs/rect"},
+        "font": {"type": "string"},
+        "color": {"$ref": "#/$defs/color"},
+        "text": {"type": "string", "description": "A key of strings (or literal text when no language has the key)."},
+        "align": {"enum": ["left", "center", "right"]},
+        "visible_when": {
+          "oneOf": [
+            {"$ref": "#/$defs/launcherState"},
+            {"type": "array", "items": {"type": "string"}}
+          ]
+        },
+        "style": {
+          "type": "object",
+          "properties": {
+            "normal": {"$ref": "#/$defs/styleState"},
+            "hover": {"$ref": "#/$defs/styleState"},
+            "pressed": {"$ref": "#/$defs/styleState"},
+            "disabled": {"$ref": "#/$defs/styleState"}
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"type": {"const": "image"}}},
+          "then": {"required": ["image"], "properties": {"image": {"$ref": "#/$defs/sha256"}}}
+        },
+        {
+          "if": {"properties": {"type": {"const": "news"}}},
+          "then": {"properties": {"interval": {"type": "integer", "minimum": 1, "maximum": 3600, "default": 8}}}
+        },
+        {
+          "if": {"properties": {"type": {"const": "button"}}},
+          "then": {
+            "required": ["action"],
+            "properties": {"action": {"enum": ["play", "exit", "minimize", "open_url"]}},
+            "if": {"properties": {"action": {"const": "open_url"}}},
+            "then": {
+              "required": ["url"],
+              "properties": {"url": {"type": "string", "pattern": "^https://[^\\s\"\\\\]+$"}}
+            }
+          }
+        }
+      ]
+    }
+  }
+}

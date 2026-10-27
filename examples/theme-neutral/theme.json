@@ -1,0 +1,104 @@
+{
+  "schema_version": 1,
+  "min_launcher_version": "0.1.0",
+  "window": {
+    "width": 960,
+    "height": 600,
+    "background": {"image": null, "color": "bg"},
+    "radius": 12,
+    "draggable": true,
+    "title": {"en": "Launcher", "es": "Lanzador"}
+  },
+  "tokens": {
+    "bg": "#14171CFF",
+    "panel": "#1C2027FF",
+    "panel_hover": "#232833FF",
+    "line": "#2A303AFF",
+    "text": "#E8EAEDFF",
+    "muted": "#8B929CFF",
+    "primary": "#4F8CFFFF",
+    "primary_hover": "#6A9EFFFF",
+    "primary_pressed": "#3B74E0FF",
+    "on_primary": "#FFFFFFFF",
+    "disabled": "#2E333BFF",
+    "on_disabled": "#6B717AFF",
+    "danger": "#E5484DFF",
+    "track": "#FFFFFF1A",
+    "none": "#00000000"
+  },
+  "fonts": {
+    "body": {"family": "Segoe UI", "size": 14, "weight": 400},
+    "small": {"family": "Segoe UI", "size": 12, "weight": 400},
+    "heading": {"family": "Segoe UI", "size": 26, "weight": 600},
+    "button": {"family": "Segoe UI", "size": 16, "weight": 600},
+    "countdown": {"family": "Segoe UI", "size": 22, "weight": 600}
+  },
+  "strings": {
+    "en": {
+      "heading": "Welcome",
+      "news_heading": "News",
+      "play": "Play",
+      "minimize": "–",
+      "close": "×",
+      "countdown_label": "Opens in",
+      "countdown": "{days}d {hours}:{minutes}:{seconds}",
+      "progress": "{percent}%  ·  {done} / {total}",
+      "version": "Version {version}",
+      "status.checking": "Checking for updates…",
+      "status.locked": "The server is not open yet.",
+      "status.ready": "Ready to play.",
+      "status.installing": "Downloading…",
+      "status.error": "Something went wrong. Please try again.",
+      "news.empty": "No news yet."
+    },
+    "es": {
+      "heading": "Bienvenido",
+      "news_heading": "Noticias",
+      "play": "Jugar",
+      "countdown_label": "Abre en",
+      "version": "Versión {version}",
+      "status.checking": "Buscando actualizaciones…",
+      "status.locked": "El servidor aún no ha abierto.",
+      "status.ready": "Listo para jugar.",
+      "status.installing": "Descargando…",
+      "status.error": "Algo salió mal. Inténtalo de nuevo.",
+      "news.empty": "Aún no hay noticias."
+    }
+  },
+  "elements": [
+    {"type": "text", "rect": [0, 0, 960, 64], "text": "",
+     "style": {"normal": {"fill": "panel"}}},
+    {"type": "text", "rect": [32, 12, 600, 40], "font": "heading", "text": "heading"},
+    {"type": "button", "rect": [868, 16, 32, 32], "action": "minimize", "text": "minimize", "font": "button", "color": "muted",
+     "style": {"normal": {"radius": 6}, "hover": {"fill": "panel_hover", "color": "text"}, "pressed": {"fill": "line"}}},
+    {"type": "button", "rect": [908, 16, 32, 32], "action": "exit", "text": "close", "font": "button", "color": "muted",
+     "style": {"normal": {"radius": 6}, "hover": {"fill": "danger", "color": "on_primary"}, "pressed": {"fill": "#C13A3FFF", "color": "on_primary"}}},
+
+    {"type": "text", "rect": [32, 88, 600, 360], "text": "",
+     "style": {"normal": {"fill": "panel", "border": "line", "border_width": 1, "radius": 10}}},
+    {"type": "text", "rect": [52, 104, 560, 24], "font": "small", "color": "muted", "text": "news_heading"},
+    {"type": "news", "rect": [52, 136, 560, 296], "font": "body", "color": "text", "interval": 8},
+
+    {"type": "text", "rect": [664, 88, 264, 360], "text": "",
+     "style": {"normal": {"fill": "panel", "border": "line", "border_width": 1, "radius": 10}}},
+    {"type": "text", "rect": [684, 104, 224, 24], "font": "small", "color": "muted", "text": "countdown_label",
+     "visible_when": ["locked"]},
+    {"type": "countdown", "rect": [684, 132, 224, 36], "font": "countdown", "color": "primary", "text": "countdown",
+     "visible_when": ["locked"]},
+    {"type": "text", "rect": [684, 416, 224, 20], "font": "small", "color": "muted", "text": "version", "align": "right"},
+
+    {"type": "status", "rect": [32, 476, 600, 22], "font": "body", "color": "muted"},
+    {"type": "progress", "rect": [32, 508, 600, 8], "visible_when": ["installing"],
+     "style": {"normal": {"fill": "primary", "track": "track", "radius": 4}}},
+    {"type": "text", "rect": [32, 524, 600, 20], "font": "small", "color": "muted", "text": "progress",
+     "visible_when": ["installing"]},
+
+    {"type": "button", "rect": [664, 476, 264, 64], "action": "play", "text": "play", "font": "button",
+     "style": {
+       "normal": {"fill": "primary", "color": "on_primary", "radius": 10},
+       "hover": {"fill": "primary_hover"},
+       "pressed": {"fill": "primary_pressed"},
+       "disabled": {"fill": "disabled", "color": "on_disabled"}
+     }}
+  ]
+}

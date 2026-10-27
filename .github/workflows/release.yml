@@ -1,0 +1,166 @@
+name: release
+
+# Publishes a GitHub Release for every version tag (vX.Y.Z). See RELEASING.md.
+# Signing goes through SignPath only when the repository variable SIGNPATH_ENABLED is 'true';
+# until then the Release carries the unsigned executable and is marked as a pre-release.
+# SignPath requires every job leading up to the signing request to run on GitHub-hosted runners.
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read   # SignPath downloads the unsigned artifact through the GitHub API
+    outputs:
+      signed: ${{ steps.select.outputs.signed }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Check that the tag matches VERSION
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          version="$(tr -d ' \r\n' < VERSION)"
+          if [[ "$TAG" != "v$version" ]]; then
+            echo "::error::tag $TAG does not match VERSION ($version)"
+            exit 1
+          fi
+
+      - name: Install toolchain
+        run: sudo apt-get update && sudo apt-get install -y clang lld llvm
+
+      - name: Build
+        run: ./build.sh
+
+      - name: Unit tests
+        run: tests/run.sh
+
+      - name: Validate example themes against the schema
+        run: |
+          python3 -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/pip" install --quiet jsonschema
+          REQUIRE_JSONSCHEMA=1 "$RUNNER_TEMP/venv/bin/python" tests/test_theme_schema.py
+
+      - name: Denylist
+        run: tools/check-denylist.sh
+
+      # Uploaded as a bare file (no zip), so the SignPath artifact configuration's root is the
+      # .exe itself (<pe-file>). The artifact is named after the file: launcher.exe.
+      - name: Upload unsigned executable
+        id: unsigned
+        uses: actions/upload-artifact@v7
+        with:
+          path: build/launcher.exe
+          archive: false
+          if-no-files-found: error
+
+      - name: Sign with SignPath
+        if: vars.SIGNPATH_ENABLED == 'true'
+        uses: signpath/github-action-submit-signing-request@v3
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+          github-artifact-id: ${{ steps.unsigned.outputs.artifact-id }}
+          wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: 3600   # every release needs a manual approval
+          output-artifact-directory: build/signed
+          skip-decompress: true
+
+      - name: Select the release executable
+        id: select
+        env:
+          SIGNING: ${{ vars.SIGNPATH_ENABLED == 'true' }}
+        run: |
+          mkdir -p dist
+          if [[ "$SIGNING" == "true" ]]; then
+            cp build/signed/launcher.exe dist/launcher.exe
+            # The PE certificate table (data directory 4) must be present after signing.
+            python3 - dist/launcher.exe <<'PY'
+          import struct, sys
+          data = open(sys.argv[1], "rb").read()
+          pe = struct.unpack_from("<I", data, 0x3C)[0]
+          optional = pe + 24
+          dirs = optional + (96 if struct.unpack_from("<H", data, optional)[0] == 0x10B else 112)
+          offset, size = struct.unpack_from("<II", data, dirs + 4 * 8)
+          if offset == 0 or size == 0:
+              sys.exit("signed launcher.exe has no Authenticode signature")
+          print(f"Authenticode signature: {size} bytes")
+          PY
+            echo "signed=true" >> "$GITHUB_OUTPUT"
+          else
+            cp build/launcher.exe dist/launcher.exe
+            echo "::warning::SIGNPATH_ENABLED is not 'true': releasing an unsigned launcher.exe"
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+          fi
+          (cd dist && sha256sum launcher.exe > SHA256SUMS && cat SHA256SUMS)
+
+      - name: Upload release files
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-files
+          path: dist/
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # create the Release; nothing else in this workflow can write
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: release-files
+          path: dist
+
+      - name: Verify checksums
+        run: cd dist && sha256sum -c SHA256SUMS
+
+      - name: Release notes from CHANGELOG.md
+        env:
+          TAG: ${{ github.ref_name }}
+          SIGNED: ${{ needs.build.outputs.signed }}
+        run: |
+          version="${TAG#v}"
+          # The section between "## [X.Y.Z]" and the next "## " heading.
+          awk -v v="$version" '
+            /^## / { if (found) exit; if (index($0, "## [" v "]") == 1) { found = 1; next } }
+            found { print }
+          ' CHANGELOG.md > notes.md
+          if ! grep -q '[^[:space:]]' notes.md; then
+            echo "::error::CHANGELOG.md has no section for $version"
+            exit 1
+          fi
+          if [[ "$SIGNED" != "true" ]]; then
+            printf '\n> This build is **not code-signed** yet. Verify it with `SHA256SUMS`.\n' >> notes.md
+          fi
+          # SignPath Foundation asks for the policy link on the download page.
+          printf '\n[Code signing policy](%s/%s/blob/main/docs/code-signing-policy.md)\n' \
+            "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" >> notes.md
+          cat notes.md
+
+      - name: Create the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          SIGNED: ${{ needs.build.outputs.signed }}
+        run: |
+          extra=()
+          [[ "$SIGNED" == "true" ]] || extra+=(--prerelease)
+          gh release create "$TAG" dist/launcher.exe dist/SHA256SUMS \
+            --repo "$GITHUB_REPOSITORY" --verify-tag --title "$TAG" --notes-file notes.md "${extra[@]}"

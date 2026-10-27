@@ -1,0 +1,11 @@
+; Threads, events and processes (thread.c, proc.c). See kernel32.def for the rest.
+LIBRARY kernel32.dll
+EXPORTS
+    CreateThread@24
+    WaitForSingleObject@8
+    CreateEventW@16
+    SetEvent@4
+    OpenProcess@12
+    GetCurrentProcessId@0
+    CreateProcessW@40
+    Sleep@4

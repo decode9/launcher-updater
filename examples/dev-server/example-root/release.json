@@ -1,0 +1,9 @@
+{
+  "schema": 1,
+  "version": "2030.01.01.1",
+  "ops": [
+    {"op": "file", "path": "game.pak", "sha256": "c184e3437f9751437dda67c21206fb3822e2e8427fe1cf20442342786586f5fc", "size": 38,
+     "chunks": [{"sha256": "c184e3437f9751437dda67c21206fb3822e2e8427fe1cf20442342786586f5fc", "size": 38}]},
+    {"op": "line", "path": "settings.ini", "prefix": "Server=", "line": "Server=play.example.com"}
+  ]
+}
