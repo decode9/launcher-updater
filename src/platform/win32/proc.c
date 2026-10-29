@@ -30,6 +30,8 @@ IMPORT BOOL WINAPI CreateProcessW(const wchar_t *, wchar_t *, void *, void *, BO
 IMPORT HANDLE WINAPI OpenProcess(DWORD, BOOL, DWORD);
 IMPORT DWORD WINAPI GetCurrentProcessId(void);
 IMPORT DWORD WINAPI WaitForSingleObject(HANDLE, DWORD);
+IMPORT HANDLE WINAPI GetCurrentProcess(void);
+IMPORT BOOL WINAPI TerminateProcess(HANDLE, unsigned);
 
 static char cmd_utf8[CMDLINE_BYTES];
 static wchar_t cmd_wide[CMDLINE_BYTES];
@@ -110,4 +112,9 @@ int proc_wait_exit(uint32_t pid, uint32_t ms)
     done = WaitForSingleObject(h, (DWORD)ms) == WAIT_OBJECT_0;
     CloseHandle(h);
     return done;
+}
+
+void proc_terminate_self(int code)
+{
+    TerminateProcess(GetCurrentProcess(), (unsigned)code);
 }

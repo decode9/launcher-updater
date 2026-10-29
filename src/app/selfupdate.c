@@ -174,6 +174,13 @@ int selfupdate_start(void)
         fs_remove(g_new);
         return 0;
     }
+    /* Closed meanwhile (the download and the signature check may take long): starting the new
+     * executable would bring back the window the user just closed. The next start retries. */
+    if (app_quitting()) {
+        log_line("self-update: the launcher is closing; not starting the new executable");
+        fs_remove(g_new);
+        return 0;
+    }
     u64_to_dec(proc_current_id(), pid);
     args[0] = "--swap";
     args[1] = pid;
@@ -186,10 +193,25 @@ int selfupdate_start(void)
     return 1;
 }
 
+/* <exe>.new.part: cache_write_atomic's temporary, left when the process ended while writing. */
+static void remove_new_part(void)
+{
+    fs_file f;
+    strbuf sb;
+    sb_init(&sb, g_target, sizeof g_target);
+    sb_add(&sb, g_new);
+    sb_add(&sb, ".part");
+    if (!sb.ok || !fs_open_read(&f, g_target)) return;
+    fs_close(&f);
+    if (fs_remove(g_target)) log_line("self-update: removed a leftover partial executable");
+}
+
 void selfupdate_cleanup(void)
 {
     fs_file f;
-    if (!new_path(g_new, sizeof g_new) || !fs_open_read(&f, g_new)) return;
+    if (!new_path(g_new, sizeof g_new)) return;
+    remove_new_part();
+    if (!fs_open_read(&f, g_new)) return;
     fs_close(&f);
     log_line(fs_remove(g_new) ? "self-update: removed a leftover new executable"
                               : "self-update: cannot remove a leftover new executable");

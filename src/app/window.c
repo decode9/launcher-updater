@@ -2,23 +2,25 @@
  * window.c - launcher.exe without arguments: the themed window (docs/spec.md, "Launcher flow").
  *
  * The UI thread (this one) owns the window; one worker thread does every network request and
- * the install, in series, because the HTTP client is not reentrant:
+ * the install, in series, because the HTTP client is not reentrant. What to show, when to poll
+ * and what Play does are decided by core/flow.c; the worker is its adapter:
  *
- *   status -> self-update when a newer launcher is offered -> theme (when its SHA-256 changed:
- *   theme.json + every blob it needs, verified, into .launcher/cache/, then ui_set_theme) ->
- *   news images -> state:
- *     closed  -> locked with the countdown; status again every 5 minutes and when it reaches 0;
- *     open    -> ready ("update available" when the release is not installed yet); status again
- *                every 5 minutes while waiting, quietly.
- *   Play     -> install with progress if needed, start the game, close the launcher.
- *   No server-> error state, retry every 30 s; ready (offline) instead when the release in
- *               state.json is complete and the last cached status said open (LOCAL rule).
+ *   fetch:   status -> self-update when a newer launcher is offered -> theme (when its SHA-256
+ *            changed: theme.json + every blob it needs, verified, into .launcher/cache/, then
+ *            ui_set_theme) -> news images -> facts for the flow. No server: the facts come from
+ *            the cached status.json.
+ *   wait:    until a click on Play or the poll delay the flow asked for.
+ *   install: with progress; launch: start the game; close: the launcher ends.
+ *
+ * Closing the window asks every download to stop (app_request_quit, g_cancel) and waits up to
+ * EXIT_WAIT_MS for the worker; a worker stuck in a blocking call is cut off with the process.
  *
  * The window starts with the cached theme when it is complete, else the built-in neutral one.
  */
 #include "app.h"
 #include "app_internal.h"
 #include "cache.h"
+#include "core/flow.h"
 #include "core/str.h"
 #include "core/theme.h"
 #include "log.h"
@@ -34,11 +36,9 @@ extern const unsigned char theme_neutral[];
 extern const unsigned int theme_neutral_size;
 
 #define THEME_JSON_MAX (256u * 1024u)
-#define RECHECK_MS (5u * 60u * 1000u) /* LOCAL: status poll while locked or ready */
-#define RETRY_MS (30u * 1000u)        /* LOCAL: retry while the server cannot be reached */
-#define MIN_WAIT_MS 5000u             /* LOCAL: floor of the poll when the countdown is due */
 #define FOREVER 0xFFFFFFFFu
 #define ARG_BYTES 1024
+#define EXIT_WAIT_MS 3000u /* after the window closes, how long the worker gets to stop */
 
 static theme_model g_theme; /* the theme on screen (texts are looked up in it) */
 static theme_model g_next;  /* a theme being checked before it replaces g_theme */
@@ -49,12 +49,15 @@ static uint8_t g_blobs[THEME_MAX_BLOBS][SHA256_BYTES];
 static uint8_t g_theme_sha[SHA256_BYTES];
 static int g_theme_known; /* g_theme_sha is the SHA-256 of the theme on screen */
 static char g_lang[THEME_NAME_BYTES];
-static status_news g_news[STATUS_NEWS_MAX];
+static status_news g_news[STATUS_NEWS_MAX];      /* the list on screen */
+static status_news g_next_news[STATUS_NEWS_MAX]; /* the list being prepared */
+static uint32_t g_news_count;
+static int g_news_shown; /* g_news has been handed to the UI */
 
 static thread_event g_wake;
 static thread_handle g_worker;
-static volatile int g_exit, g_play, g_cancel;
-static int g_skip_update, g_offline;
+static volatile int g_play, g_cancel;
+static int g_skip_update;
 
 /* ---- texts ---------------------------------------------------------------------------- */
 
@@ -70,11 +73,19 @@ static void enter(theme_launcher_state state, const char *key, const char *fallb
     if (key) show(key, fallback);
 }
 
-/* Waits for a click or ms; returns 0 when the launcher is closing. */
-static int pause_ms(uint32_t ms)
+/* Puts a flow view on screen. */
+static void apply_view(const flow_view *view)
 {
-    if (!g_exit) event_wait(&g_wake, ms);
-    return !g_exit;
+    if (view->screen == THEME_LS_LOCKED) ui_set_countdown(view->countdown);
+    if (view->screen == THEME_LS_INSTALLING) ui_set_progress(0, 0);
+    ui_set_play_enabled(view->play_enabled);
+    enter(view->screen, view->key, view->fallback);
+}
+
+/* A click on Play since the last call (read and cleared at once: none is lost or served twice). */
+static int take_play(void)
+{
+    return __atomic_exchange_n(&g_play, 0, __ATOMIC_ACQ_REL);
 }
 
 /* ---- theme ---------------------------------------------------------------------------- */
@@ -84,7 +95,7 @@ static int blobs_cached(const theme_model *theme, int download)
     uint32_t i, n = theme_required_blobs(theme, g_blobs, THEME_MAX_BLOBS);
     if (n > THEME_MAX_BLOBS) return 0;
     for (i = 0; i < n; i++) {
-        if (g_exit) return 0;
+        if (app_quitting()) return 0;
         if (!(download ? cache_fetch_blob(g_blobs[i], APP_SIZE_UNKNOWN) : cache_has_blob(g_blobs[i]))) return 0;
     }
     return 1;
@@ -147,13 +158,32 @@ static void refresh_theme(void)
     log_end();
 }
 
-/* News whose image cannot be cached are shown without it. */
+/* 1 if the list on screen shows this image: it is cached and verified already. */
+static int image_on_screen(const uint8_t sha[SHA256_BYTES])
+{
+    uint32_t i;
+    for (i = 0; i < g_news_count; i++)
+        if (g_news[i].has_image && mem_eq(g_news[i].image, sha, SHA256_BYTES)) return 1;
+    return 0;
+}
+
+/* News whose image cannot be cached are shown without it (and retried on the next status).
+ * The UI reloads every image when it gets a list, so an unchanged list is not sent again. */
 static void refresh_news(void)
 {
     uint32_t i, n = app_status.news_count;
-    memcpy(g_news, app_status.news, n * sizeof g_news[0]);
-    for (i = 0; i < n && !g_exit; i++)
-        if (g_news[i].has_image && !cache_fetch_blob(g_news[i].image, APP_SIZE_UNKNOWN)) g_news[i].has_image = 0;
+    status_news *item;
+    memcpy(g_next_news, app_status.news, n * sizeof g_next_news[0]);
+    for (i = 0; i < n; i++) {
+        item = &g_next_news[i];
+        if (app_quitting()) return;
+        if (item->has_image && !image_on_screen(item->image) && !cache_fetch_blob(item->image, APP_SIZE_UNKNOWN))
+            item->has_image = 0;
+    }
+    if (g_news_shown && status_news_equal(g_news, g_news_count, g_next_news, n)) return;
+    memcpy(g_news, g_next_news, n * sizeof g_news[0]);
+    g_news_count = n;
+    g_news_shown = 1;
     ui_set_news(g_news, n);
 }
 
@@ -207,116 +237,124 @@ static int launch_game(void)
     return ok;
 }
 
-/* Returns 1 when the game was started (the launcher then closes). */
-static int play(void)
+/* ---- worker --------------------------------------------------------------------------- */
+
+/* No server: the facts of the cached status, if any (it is what Play may use offline). */
+static void cached_facts(flow_facts *facts)
 {
-    install_result *result;
-    int code;
-    if (!g_offline && !app_release_is_current()) {
-        ui_set_progress(0, 0);
-        enter(THEME_LS_INSTALLING, 0, 0);
-        code = app_install_release(on_progress, 0, &g_cancel, &result);
-        if (g_exit) return 0;
-        if (code != 0) {
-            enter(THEME_LS_READY, result->error == INSTALL_ERR_SPACE ? "status.no_space" : "status.install_failed",
-                  result->error == INSTALL_ERR_SPACE ? "Not enough free disk space for the update."
-                                                     : "The update failed. Press Play to try again.");
-            return 0;
-        }
+    size_t len;
+    if (!cache_read("status.json", g_status_cache, sizeof g_status_cache, &len) ||
+        !app_parse_status(g_status_cache, len)) {
+        log_line("status: unreachable and no cached status");
+        return;
     }
-    if (!launch_game()) {
-        enter(THEME_LS_READY, "status.launch_failed", "The game could not be started.");
-        return 0;
+    facts->known = 1;
+    facts->open = app_status.open;
+    facts->has_release = app_status.release.present;
+    facts->secs_to_open = status_seconds_to_open(&app_status);
+    facts->current = app_release_is_current();
+    facts->interrupted = app_install_interrupted();
+    ui_set_version(app_status.release.version);
+    if (facts->open && facts->current) log_line("offline: the installed release may be played (last status said open)");
+}
+
+/* Asks the server for the status and gathers the facts the flow decides with. Returns 0 when
+ * the launcher must close (a self-update was started). */
+static int fetch_facts(flow_facts *facts)
+{
+    size_t len;
+    const char *text;
+    memset(facts, 0, sizeof *facts);
+    if (!app_fetch_status()) {
+        cached_facts(facts);
+        return 1;
     }
+    text = app_status_text(&len);
+    if (!cache_save("status.json", text, len)) log_line("error: cannot cache status.json");
+    if (!g_skip_update && selfupdate_available()) {
+        enter(THEME_LS_CHECKING, "status.self_update", "Updating the launcher…");
+        if (selfupdate_start()) return 0;
+        g_skip_update = 1; /* one attempt per run; this version carries on */
+    }
+    refresh_theme();
+    if (app_quitting()) return 1;
+    refresh_news();
+    ui_set_version(app_status.release.version);
+    facts->reachable = facts->known = 1;
+    facts->open = app_status.open;
+    facts->has_release = app_status.release.present;
+    facts->secs_to_open = status_seconds_to_open(&app_status);
+    facts->current = app_release_is_current();
+    facts->interrupted = app_install_interrupted();
     return 1;
 }
 
-/* ---- worker --------------------------------------------------------------------------- */
-
-static void show_ready(void)
+/* Spreads the polls of many launchers whose countdown ended at the same time. */
+static uint32_t jitter_seed(void)
 {
-    ui_set_version(app_status.release.version); /* also from the cached status when offline */
-    if (g_offline) enter(THEME_LS_READY, "status.offline", "Offline: you can play the installed version.");
-    else if (app_release_is_current()) enter(THEME_LS_READY, 0, 0);
-    else if (app_install_interrupted())
-        enter(THEME_LS_READY, "status.resume", "The install was interrupted: Play resumes it.");
-    else enter(THEME_LS_READY, "status.update", "An update is available: Play installs it first.");
+    return sys_ticks_ms() ^ (proc_current_id() * 2654435761u);
 }
 
-/* Waits in state ready for Play or for the next poll. Returns 1 when the game was started. */
-static int wait_ready(uint32_t ms)
+/* Waits up to ms for Play; a click the flow ignores does not restart the wait. */
+static flow_step wait_step(flow_state *f, uint32_t ms)
 {
-    g_play = 0;
-    show_ready();
-    while (pause_ms(ms)) {
-        if (!g_play) return 0; /* time to poll again */
-        g_play = 0;
-        if (play()) return 1;
+    uint32_t start = sys_ticks_ms(), spent;
+    flow_step s;
+    while (!app_quitting()) {
+        if (take_play()) {
+            s = flow_on_play(f);
+            if (s.action != FLOW_DO_NONE) return s;
+        }
+        spent = sys_ticks_ms() - start;
+        if (spent >= ms) break;
+        event_wait(&g_wake, ms - spent);
     }
-    return 0;
+    return flow_on_timeout(f);
 }
 
-static void wait_locked(void)
+static flow_step install_step(flow_state *f)
 {
-    int64_t secs = status_seconds_to_open(&app_status);
-    uint32_t ms = RECHECK_MS;
-    ui_set_countdown(secs);
-    enter(THEME_LS_LOCKED, 0, 0);
-    if (secs >= 0 && secs < (int64_t)(RECHECK_MS / 1000u)) ms = (uint32_t)secs * 1000u + 1000u;
-    if (ms < MIN_WAIT_MS) ms = MIN_WAIT_MS;
-    pause_ms(ms);
+    install_result *result;
+    if (app_install_release(on_progress, 0, &g_cancel, &result) == 0) return flow_on_install(f, FLOW_INSTALL_OK);
+    return flow_on_install(f, result->error == INSTALL_ERR_SPACE ? FLOW_INSTALL_NO_SPACE : FLOW_INSTALL_FAILED);
 }
 
-/* No server: offline play when allowed, else the error state; then waits for the retry. */
-static int offline(void)
+/* Drives the flow until the game starts, a self-update takes over or the launcher closes. */
+static void run_flow(void)
 {
-    size_t len;
-    g_offline = cache_read("status.json", g_status_cache, sizeof g_status_cache, &len) &&
-                app_parse_status(g_status_cache, len) && app_status.open && app_release_is_current();
-    if (g_offline) {
-        log_line("offline: the installed release may be played (last status said open)");
-        return wait_ready(RETRY_MS);
+    flow_state f;
+    flow_facts facts;
+    flow_step step = flow_start(&f);
+    while (!app_quitting()) {
+        if (step.show) apply_view(&step.view);
+        switch (step.action) {
+        case FLOW_DO_FETCH:
+            if (!fetch_facts(&facts)) {
+                ui_close();
+                return;
+            }
+            if (app_quitting()) return;
+            if (take_play()) flow_on_play(&f); /* clicked while fetching: this status serves it */
+            step = flow_on_status(&f, &facts, jitter_seed());
+            break;
+        case FLOW_DO_WAIT: step = wait_step(&f, step.wait_ms); break;
+        case FLOW_DO_INSTALL: step = install_step(&f); break;
+        case FLOW_DO_LAUNCH: step = flow_on_launch(&f, launch_game()); break;
+        case FLOW_DO_CLOSE: ui_close(); return;
+        case FLOW_DO_NONE: return; /* never returned as a next step */
+        }
     }
-    enter(THEME_LS_ERROR, "status.connection", "Cannot reach the server. Retrying in 30 seconds.");
-    pause_ms(RETRY_MS);
-    return 0;
 }
 
 static void worker(void *unused)
 {
-    size_t len;
-    const char *text;
-    int started = 0;
     (void)unused;
     if (!app_ports_init() || !cache_init()) {
         enter(THEME_LS_ERROR, "status.folder", "The launcher folder cannot be written.");
-        pause_ms(FOREVER);
+        if (!app_quitting()) event_wait(&g_wake, FOREVER);
         return;
     }
-    while (!g_exit && !started) {
-        if (!app_fetch_status()) {
-            started = offline();
-            continue;
-        }
-        g_offline = 0;
-        text = app_status_text(&len);
-        if (!cache_save("status.json", text, len)) log_line("error: cannot cache status.json");
-        if (!g_skip_update && selfupdate_available()) {
-            enter(THEME_LS_CHECKING, "status.self_update", "Updating the launcher…");
-            if (selfupdate_start()) {
-                started = 1;
-                break;
-            }
-            g_skip_update = 1; /* one attempt per run; this version carries on */
-        }
-        refresh_theme();
-        if (g_exit) break;
-        refresh_news();
-        ui_set_version(app_status.release.version);
-        if (!app_status.open) wait_locked();
-        else started = wait_ready(RECHECK_MS);
-    }
-    if (started) ui_close();
+    run_flow();
 }
 
 /* ---- UI thread ------------------------------------------------------------------------ */
@@ -334,7 +372,7 @@ static void on_action(void *ctx, theme_action action)
     if (action == THEME_ACT_PLAY) {
         g_play = 1;
     } else if (action == THEME_ACT_EXIT) {
-        g_exit = 1;
+        app_request_quit();
         g_cancel = 1;
     }
     event_set(&g_wake);
@@ -374,10 +412,16 @@ int app_window(void)
         enter(THEME_LS_ERROR, 0, 0);
     }
     ui_run();
-    g_exit = 1;
-    g_cancel = 1; /* stops an install in progress; the next run resumes it */
+    app_request_quit(); /* downloads stop at their next chunk, retries and self-update stop */
+    g_cancel = 1;       /* stops an install at its next block; the next run resumes it */
     event_set(&g_wake);
-    thread_join(&g_worker);
+    if (!thread_join_for(&g_worker, EXIT_WAIT_MS)) {
+        /* Stuck in a blocking call (DNS has no timeout; a socket read waits up to 15 s).
+         * Nothing on disk needs it to finish: the install is journaled, cached files are written
+         * to ".part" and renamed. The worker may be logging, so this thread does not; the
+         * kernel releases the single-instance mutex only when the worker is gone too. */
+        proc_terminate_self(0);
+    }
     log_line("exit");
     app_unlock();
     app_end();

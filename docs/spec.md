@@ -44,6 +44,8 @@ from `launcher.json`.
   The launcher computes the countdown as `opens_at − server_time` (plus its monotonic clock since
   the response), never with the PC clock.
 - `theme`, `release` and `launcher` are blobs. `launcher` may be absent (no self-update).
+  `release` may be absent or `null` while no version has been published yet; a `release` that is
+  present must be a complete blob with a non-empty `version`.
 - News titles: the user's language, else `en`, else the first one. Links must be `https://`.
 - Unknown fields are ignored (both sides).
 
@@ -140,24 +142,33 @@ window to the front and exits instead). One worker thread then does every reques
    theme that is rejected, needs a newer launcher or misses blobs is ignored (logged).
 4. News images go to the cache too; an item whose image fails is shown without it.
 5. `open: false` → state `locked`, countdown `opens_at − server_time`; the status is fetched
-   again every 5 minutes and when the countdown reaches 0.
+   again every 5 minutes, and when the countdown reaches 0 (at least 5 s after it). Once the
+   countdown is due and the server still says closed, the status is fetched again after 5, 10,
+   20, 40 and then every 60 seconds, each plus a random 0–25 %, so that launchers whose countdown
+   ended at the same time do not all ask at once (LOCAL rule).
    `open: true` → state `ready`; if the release is not installed yet the status line says an
-   update is available (Play installs first). The status is fetched again every 5 minutes.
-6. **Play**: if `.launcher/state.json` does not already hold the release, install it (state
-   `installing`, progress bar). Then start `launch.exe` with `launch.args` (`{server}`
-   replaced), working folder = the launcher folder, and close the launcher. On failure the
-   state goes back to `ready` with the error in the status line, so Play retries.
+   update is available (Play installs first), or that an interrupted install will be resumed.
+   With no published release (`release` absent or `null`) the status line says so
+   (`status.no_release`) and Play is disabled. The status is fetched again every 5 minutes.
+6. **Play** first fetches a fresh status (state `checking`) and decides with it: closed → back
+   to `locked`; no release → the no-release `ready` screen; otherwise, if `.launcher/state.json`
+   does not already hold the release, install it (state `installing`, progress bar). Then start
+   `launch.exe` with `launch.args` (`{server}` replaced), working folder = the launcher folder,
+   and close the launcher. On failure the state goes back to `ready` with the error in the
+   status line, so Play retries. A click that arrives while a status is being fetched is kept
+   and served by that status.
 7. **Close / exit** stops an install in progress (it resumes next time) and waits for the
    worker before exiting. `minimize` and `open_url` (https only) are handled by the window.
 
 **No server** (status cannot be fetched): if `.launcher/state.json` holds the complete release
 named by the last cached status **and** that status said `open: true`, the launcher is `ready`
-(offline) and Play starts the installed game without installing. Otherwise it is in state
+(offline) and Play, when its fresh status cannot be fetched either, starts the installed game
+without installing. Otherwise it is in state
 `error`. Either way the status is retried every 30 seconds. (Local rule: playing offline only
 makes sense when the game itself can reach its server; the launcher cannot know, so it allows
 what the last confirmed state allowed.)
 
-Extra status texts (theme keys, with built-in English fallbacks): `status.update`, `status.resume`,
+Extra status texts (theme keys, with built-in English fallbacks): `status.update`, `status.resume`, `status.no_release`,
 `status.offline`, `status.connection`, `status.install_failed`, `status.no_space`,
 `status.launch_failed`, `status.self_update`, `status.config`, `status.folder`.
 

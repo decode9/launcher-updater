@@ -107,6 +107,8 @@ struct IStream {
 #define SW_RESTORE 9
 #define SM_CXSCREEN 0
 #define SM_CYSCREEN 1
+#define SPI_GETWORKAREA 0x0030
+#define LOGPIXELSY 90
 #define SWP_NOZORDER 0x0004
 #define SWP_NOACTIVATE 0x0010
 #define WS_POPUP 0x80000000UL
@@ -148,6 +150,7 @@ IMPORT HWND WINAPI SetCapture(HWND);
 IMPORT BOOL WINAPI ReleaseCapture(void);
 IMPORT BOOL WINAPI ScreenToClient(HWND, POINT *);
 IMPORT int WINAPI GetSystemMetrics(int);
+IMPORT BOOL WINAPI SystemParametersInfoW(UINT, UINT, void *, UINT);
 IMPORT BOOL WINAPI SetForegroundWindow(HWND);
 IMPORT HWND WINAPI FindWindowW(const wchar_t *, const wchar_t *);
 IMPORT BOOL WINAPI IsIconic(HWND);
@@ -159,6 +162,7 @@ IMPORT BOOL WINAPI DeleteObject(HGDIOBJ);
 IMPORT BOOL WINAPI DeleteDC(HDC);
 IMPORT BOOL WINAPI BitBlt(HDC, int, int, int, int, HDC, int, int, DWORD);
 IMPORT HRGN WINAPI CreateRoundRectRgn(int, int, int, int, int, int);
+IMPORT int WINAPI GetDeviceCaps(HDC, int);
 
 IMPORT HINSTANCE WINAPI ShellExecuteW(HWND, const wchar_t *, const wchar_t *, const wchar_t *, const wchar_t *,
                                       int);

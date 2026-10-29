@@ -44,6 +44,12 @@ void app_unlock(void);
 
 int app_load_config(void);
 
+/* The window is closing (any thread may call it; it is never undone). From then on the
+ * downloads of this file (status, manifest, blobs) stop at their next chunk and do not retry,
+ * and self-update does not hand over to the new executable. */
+void app_request_quit(void);
+int app_quitting(void);
+
 /* GET /v1/status into app_status (logged). The raw document stays available until the next
  * fetch through app_status_text, so it can be cached. */
 int app_fetch_status(void);

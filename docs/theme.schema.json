@@ -22,7 +22,7 @@
       "additionalProperties": {"$ref": "#/$defs/font"}
     },
     "strings": {
-      "description": "Translated strings: language tag -> key -> text. Up to 8 languages and 128 strings per language.",
+      "description": "Translated strings: language tag -> key -> text. Up to 8 languages and 128 strings per language. The keys the launcher itself uses (status.checking ... status.no_release, news.empty) are listed in docs/theming.md.",
       "type": "object",
       "propertyNames": {"minLength": 1, "maxLength": 31},
       "additionalProperties": {

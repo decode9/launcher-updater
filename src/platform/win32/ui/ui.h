@@ -83,6 +83,10 @@ void ui_set_tick(ui_tick_fn fn, void *ctx, uint32_t ms);
  * status set with ui_set_status. */
 void ui_set_state(theme_launcher_state state);
 
+/* Whether play buttons react in ready (1 at creation). 0 draws them disabled, as in the
+ * other states: there is nothing to play. Kept across ui_set_state. */
+void ui_set_play_enabled(int enabled);
+
 /* Download progress for progress bars and {percent} {done} {total}. */
 void ui_set_progress(uint64_t done, uint64_t total);
 

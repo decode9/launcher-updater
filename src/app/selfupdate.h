@@ -20,7 +20,7 @@ int selfupdate_available(void);
  * (the new one waits for this process). Worker thread. */
 int selfupdate_start(void);
 
-/* Step 5: removes "<exe>.new" if it is there. */
+/* Step 5: removes "<exe>.new" (and its partial "<exe>.new.part") if it is there. */
 void selfupdate_cleanup(void);
 
 #endif

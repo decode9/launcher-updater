@@ -30,8 +30,29 @@ typedef struct {
 
 void display_countdown_split(uint32_t seconds, display_countdown *out);
 
-/* Whether a button with this action reacts in launcher state ls: play only in ready, the
- * others always. */
-int display_action_enabled(theme_action action, theme_launcher_state ls);
+/* Whether a button with this action reacts in launcher state ls: play only in ready and while
+ * play_enabled (0 when there is nothing to play), the others always. */
+int display_action_enabled(theme_action action, theme_launcher_state ls, int play_enabled);
+
+/* ---- DPI scaling: themes are in logical pixels (96 DPI); the window shows them at a scale in
+ * percent (100 = 1:1, 150 at 144 DPI...). */
+#define DISPLAY_SCALE_MIN 25  /* lowest scale display_scale_fit goes to */
+#define DISPLAY_SCALE_MAX 500 /* highest scale display_scale_from_dpi gives */
+
+/* Scale for a system DPI, rounded to the nearest percent: 96 -> 100, 120 -> 125, 144 -> 150,
+ * 192 -> 200. 0 or anything below 96 gives 100; capped at DISPLAY_SCALE_MAX. */
+uint32_t display_scale_from_dpi(uint32_t dpi);
+
+/* The largest scale <= scale at which a w x h window fits in an area_w x area_h work area (it
+ * may go below 100, so a theme bigger than the screen still shows whole), never below
+ * DISPLAY_SCALE_MIN. An empty area (0) leaves scale as is. */
+uint32_t display_scale_fit(uint32_t scale, uint32_t w, uint32_t h, uint32_t area_w, uint32_t area_h);
+
+/* Logical -> device pixels, rounded to nearest (v up to 65535). */
+int display_scaled(int v, uint32_t scale);
+
+/* Device -> logical pixels, rounded down (also for negative v, so a point left of or above the
+ * window never lands on column or row 0). scale 0 counts as 100. */
+int display_unscaled(int v, uint32_t scale);
 
 #endif

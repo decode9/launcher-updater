@@ -65,14 +65,65 @@ TEST(countdown)
 
 TEST(actions)
 {
-    CHECK(display_action_enabled(THEME_ACT_PLAY, THEME_LS_READY));
-    CHECK(!display_action_enabled(THEME_ACT_PLAY, THEME_LS_CHECKING));
-    CHECK(!display_action_enabled(THEME_ACT_PLAY, THEME_LS_LOCKED));
-    CHECK(!display_action_enabled(THEME_ACT_PLAY, THEME_LS_INSTALLING));
-    CHECK(!display_action_enabled(THEME_ACT_PLAY, THEME_LS_ERROR));
-    CHECK(display_action_enabled(THEME_ACT_EXIT, THEME_LS_ERROR));
-    CHECK(display_action_enabled(THEME_ACT_MINIMIZE, THEME_LS_INSTALLING));
-    CHECK(display_action_enabled(THEME_ACT_OPEN_URL, THEME_LS_CHECKING));
+    CHECK(display_action_enabled(THEME_ACT_PLAY, THEME_LS_READY, 1));
+    CHECK(!display_action_enabled(THEME_ACT_PLAY, THEME_LS_CHECKING, 1));
+    CHECK(!display_action_enabled(THEME_ACT_PLAY, THEME_LS_LOCKED, 1));
+    CHECK(!display_action_enabled(THEME_ACT_PLAY, THEME_LS_INSTALLING, 1));
+    CHECK(!display_action_enabled(THEME_ACT_PLAY, THEME_LS_ERROR, 1));
+    CHECK(display_action_enabled(THEME_ACT_EXIT, THEME_LS_ERROR, 1));
+    CHECK(display_action_enabled(THEME_ACT_MINIMIZE, THEME_LS_INSTALLING, 1));
+    CHECK(display_action_enabled(THEME_ACT_OPEN_URL, THEME_LS_CHECKING, 1));
+    CHECK(!display_action_enabled(THEME_ACT_PLAY, THEME_LS_READY, 0)); /* nothing to play */
+    CHECK(display_action_enabled(THEME_ACT_EXIT, THEME_LS_READY, 0));
+    CHECK(display_action_enabled(THEME_ACT_OPEN_URL, THEME_LS_READY, 0));
+}
+
+TEST(dpi_scale)
+{
+    CHECK(display_scale_from_dpi(0) == 100);
+    CHECK(display_scale_from_dpi(72) == 100);
+    CHECK(display_scale_from_dpi(96) == 100);
+    CHECK(display_scale_from_dpi(120) == 125);
+    CHECK(display_scale_from_dpi(144) == 150);
+    CHECK(display_scale_from_dpi(168) == 175);
+    CHECK(display_scale_from_dpi(192) == 200);
+    CHECK(display_scale_from_dpi(100) == 104);
+    CHECK(display_scale_from_dpi(480) == 500);
+    CHECK(display_scale_from_dpi(100000) == DISPLAY_SCALE_MAX);
+}
+
+TEST(dpi_fit)
+{
+    /* fits: unchanged */
+    CHECK(display_scale_fit(150, 960, 600, 1920, 1040) == 150);
+    CHECK(display_scale_fit(200, 960, 600, 1920, 1200) == 200);
+    /* too wide / too tall: the largest scale that fits */
+    CHECK(display_scale_fit(200, 960, 600, 1440, 1000) == 150);
+    CHECK(display_scale_fit(200, 960, 600, 3000, 1000) == 166);
+    CHECK(display_scaled(600, 166) <= 1000);
+    /* below 100 when even 1:1 does not fit, down to the minimum */
+    CHECK(display_scale_fit(100, 4096, 4096, 1920, 1040) == 25);
+    CHECK(display_scale_fit(100, 2000, 1000, 1920, 1040) == 96);
+    CHECK(display_scaled(2000, 96) <= 1920);
+    /* unknown work area */
+    CHECK(display_scale_fit(150, 960, 600, 0, 0) == 150);
+}
+
+TEST(dpi_points)
+{
+    CHECK(display_scaled(960, 100) == 960);
+    CHECK(display_scaled(960, 150) == 1440);
+    CHECK(display_scaled(14, 125) == 18); /* 17.5 rounds up */
+    CHECK(display_scaled(4096, 500) == 20480);
+    CHECK(display_scaled(0, 150) == 0);
+    CHECK(display_unscaled(0, 150) == 0);
+    CHECK(display_unscaled(149, 150) == 99);
+    CHECK(display_unscaled(150, 150) == 100);
+    CHECK(display_unscaled(1439, 150) == 959);
+    CHECK(display_unscaled(-1, 150) == -1);
+    CHECK(display_unscaled(-1, 50) == -2);
+    CHECK(display_unscaled(10, 0) == 10);
+    CHECK(display_unscaled(399, 200) == 199);
 }
 
 int main(void)
@@ -82,5 +133,8 @@ int main(void)
     RUN(fill_width);
     RUN(countdown);
     RUN(actions);
+    RUN(dpi_scale);
+    RUN(dpi_fit);
+    RUN(dpi_points);
     return test_report();
 }

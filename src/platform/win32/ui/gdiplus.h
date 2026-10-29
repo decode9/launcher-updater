@@ -48,6 +48,7 @@ typedef struct {
 #define GP_COMBINE_REPLACE 0
 #define GP_COMBINE_INTERSECT 1
 #define GP_PIXFMT_32BPP_PARGB 0x000E200B
+#define GP_MATRIX_ORDER_PREPEND 0
 
 IMPORT GpStatus WINAPI GdiplusStartup(uintptr_t *, const GdiplusStartupInput *, void *);
 IMPORT void WINAPI GdiplusShutdown(uintptr_t);
@@ -72,6 +73,7 @@ IMPORT GpStatus WINAPI GdipDrawPath(GpGraphics *, GpPen *, GpPath *);
 IMPORT GpStatus WINAPI GdipSetClipPath(GpGraphics *, GpPath *, int);
 IMPORT GpStatus WINAPI GdipSetClipRectI(GpGraphics *, int, int, int, int, int);
 IMPORT GpStatus WINAPI GdipResetClip(GpGraphics *);
+IMPORT GpStatus WINAPI GdipScaleWorldTransform(GpGraphics *, float, float, int);
 IMPORT GpStatus WINAPI GdipDrawImageRectI(GpGraphics *, GpImage *, int, int, int, int);
 IMPORT GpStatus WINAPI GdipCreateBitmapFromStream(IStream *, GpImage **);
 IMPORT GpStatus WINAPI GdipCreateBitmapFromScan0(int, int, int, int, uint8_t *, GpImage **);

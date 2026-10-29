@@ -234,6 +234,9 @@ TEST(format)
     CHECK(!theme_format("{percent}%%%%%%%%", &v, out, 6));
     CHECK_STR(out, "42%%%");
     CHECK(!theme_format("x", &v, out, 0));
+    v.version = ""; /* no release published: the whole text disappears */
+    CHECK(theme_format("Version {version}", &v, out, sizeof out));
+    CHECK_STR(out, "");
 }
 
 TEST(unknown_type_and_fields)

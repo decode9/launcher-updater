@@ -44,6 +44,11 @@ downloaded, the launcher uses the neutral theme built into the executable
 
 - Pixels, origin at the top-left corner of the window, `rect` is `[x, y, width, height]`, all
   non-negative integers. Width and height must be at least 1.
+- They are logical pixels at 96 DPI (100 %), and so are the window size, font sizes, radii and
+  border widths. The launcher scales everything to the system DPI (150 % at 144 DPI, 200 % at
+  192 DPI) and draws images at the scaled size. If the scaled window does not fit in the screen's
+  work area, the scale is lowered, even below 100 % (down to 25 %), so the whole window shows,
+  centred in the work area.
 - An element that sticks out of the window is clipped to it; one that starts outside is not
   drawn. Neither is an error.
 - The window is not resizable and the theme is not scaled.
@@ -72,14 +77,14 @@ downloaded, the launcher uses the neutral theme built into the executable
 |---|---|
 | `{days}` `{hours}` `{minutes}` `{seconds}` | `countdown` (time until the server opens; hours, minutes and seconds are two digits) |
 | `{percent}` `{done}` `{total}` | download progress (`{done}`/`{total}` are human sizes such as `12.5 MB`) |
-| `{version}` | the release version |
+| `{version}` | the release version (a text using it is hidden while no version is published) |
 
 - Keys the launcher itself uses (define them in `en` at least; see the neutral theme):
 
 | Key | Shown |
 |---|---|
 | `status.checking`, `status.locked`, `status.ready`, `status.installing`, `status.error` | by `status` elements, according to the launcher state |
-| `status.update`, `status.resume`, `status.offline`, `status.connection`, `status.install_failed`, `status.no_space`, `status.launch_failed`, `status.self_update`, `status.config`, `status.folder` | optional: replace the status line in those situations ([spec](spec.md#launcher-flow)); without them the launcher shows a built-in English text |
+| `status.update`, `status.resume`, `status.no_release`, `status.offline`, `status.connection`, `status.install_failed`, `status.no_space`, `status.launch_failed`, `status.self_update`, `status.config`, `status.folder` | optional: replace the status line in those situations ([spec](spec.md#launcher-flow)); without them the launcher shows a built-in English text (`status.no_release`: "No version has been published yet.", shown in `ready` with Play disabled) |
 | `news.empty` | by `news` elements when there are no news items |
 
 ## Launcher states and `visible_when`

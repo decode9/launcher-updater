@@ -23,6 +23,7 @@ EXPORTS
     GdipSetClipPath@12
     GdipSetClipRectI@24
     GdipResetClip@4
+    GdipScaleWorldTransform@16
     GdipDrawImageRectI@24
     GdipCreateBitmapFromStream@8
     GdipCreateBitmapFromScan0@24

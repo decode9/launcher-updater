@@ -92,6 +92,33 @@ TEST(minimal_and_open)
     CHECK(status_seconds_to_open(&st) == 0);
 }
 
+#define THEME_ONLY "\"theme\": {\"sha256\": \"" H2 "\", \"size\": 1}"
+
+TEST(no_release)
+{
+    CHECK(parse("{\"schema\": 1, \"server_time\": \"2026-11-12T00:00:00Z\", \"open\": true, " THEME_ONLY "}", 0) ==
+          STATUS_OK);
+    CHECK(!st.release.present);
+    CHECK(st.theme.present);
+    CHECK(parse("{\"schema\": 1, \"server_time\": \"2026-11-12T00:00:00Z\", \"open\": true, " THEME_ONLY
+                ", \"release\": null}", 0) == STATUS_OK);
+    CHECK(!st.release.present);
+    /* a release that is there must still be complete */
+    CHECK(parse("{\"schema\": 1, \"server_time\": \"2026-11-12T00:00:00Z\", \"open\": true, " THEME_ONLY
+                ", \"release\": {\"version\": \"\", \"sha256\": \"" H3 "\", \"size\": 2}}", 0) == STATUS_ERR_BLOB);
+    CHECK(parse("{\"schema\": 1, \"server_time\": \"2026-11-12T00:00:00Z\", \"open\": true, " THEME_ONLY
+                ", \"release\": {\"sha256\": \"" H3 "\", \"size\": 2}}", 0) == STATUS_ERR_BLOB);
+    CHECK(parse("{\"schema\": 1, \"server_time\": \"2026-11-12T00:00:00Z\", \"open\": true, " THEME_ONLY
+                ", \"release\": \"r1\"}", 0) == STATUS_ERR_BLOB);
+    /* the release is reset by every parse */
+    CHECK(parse("{\"schema\": 1, \"server_time\": \"2026-11-12T00:00:00Z\", \"open\": true, " BLOBS "}", 0) == STATUS_OK);
+    CHECK(st.release.present);
+    CHECK(parse("{\"schema\": 1, \"server_time\": \"2026-11-12T00:00:00Z\", \"open\": true, " THEME_ONLY "}", 0) ==
+          STATUS_OK);
+    CHECK(!st.release.present);
+    CHECK_STR(st.release.version, ""); /* no stale version on screen */
+}
+
 TEST(news_details)
 {
     CHECK(parse("{\"schema\": 1, \"server_time\": \"2026-11-12T00:00:00Z\", \"open\": true, " BLOBS ", \"news\": ["
@@ -120,13 +147,73 @@ TEST(errors)
     CHECK(parse("[1]", 0) == STATUS_ERR_JSON);
 }
 
+static status_news news_item(const char *title, int image_byte)
+{
+    status_news n;
+    memset(&n, 0, sizeof n);
+    strcpy(n.title, title);
+    if (image_byte) {
+        n.has_image = 1;
+        memset(n.image, image_byte, sizeof n.image);
+    }
+    return n;
+}
+
+TEST(news_equal)
+{
+    status_news a[2], b[2];
+    a[0] = news_item("one", 1);
+    a[1] = news_item("two", 0);
+    memcpy(b, a, sizeof a);
+    CHECK(status_news_equal(a, 2, b, 2));
+    CHECK(status_news_equal(a, 0, b, 0));
+    CHECK(!status_news_equal(a, 2, b, 1));
+    b[0].image[5] = 9; /* another image */
+    CHECK(!status_news_equal(a, 2, b, 2));
+    b[0] = a[0];
+    b[0].has_image = 0; /* image dropped */
+    CHECK(!status_news_equal(a, 2, b, 2));
+    b[0] = a[0];
+    strcpy(b[1].link, "https://example.com/x");
+    CHECK(!status_news_equal(a, 2, b, 2));
+    b[1] = a[1];
+    strcpy(b[1].title, "deux");
+    CHECK(!status_news_equal(a, 2, b, 2));
+    b[1] = a[1];
+    a[1].image[0] = 7; /* ignored without has_image */
+    CHECK(status_news_equal(a, 2, b, 2));
+}
+
+TEST(news_keep_index)
+{
+    status_news old[3], cur[3];
+    old[0] = news_item("a", 1);
+    old[1] = news_item("b", 2);
+    old[2] = news_item("c", 0);
+    CHECK_EQ_U64(status_news_keep_index(old, 3, 1, old, 3), 1);      /* same list: same item */
+    cur[0] = old[2];
+    cur[1] = old[0];
+    cur[2] = old[1];
+    CHECK_EQ_U64(status_news_keep_index(old, 3, 1, cur, 3), 2);      /* item moved */
+    cur[0] = news_item("x", 0);
+    cur[1] = news_item("y", 0);
+    CHECK_EQ_U64(status_news_keep_index(old, 3, 1, cur, 2), 1);      /* gone: index kept while it fits */
+    CHECK_EQ_U64(status_news_keep_index(old, 3, 2, cur, 2), 0);      /* gone and out of range */
+    CHECK_EQ_U64(status_news_keep_index(old, 3, 0, cur, 0), 0);      /* empty list */
+    CHECK_EQ_U64(status_news_keep_index(old, 0, 0, cur, 2), 0);      /* nothing shown before */
+    CHECK_EQ_U64(status_news_keep_index(old, 3, 5, old, 3), 0);      /* stale index */
+}
+
 int main(void)
 {
     RUN(utc);
     RUN(spec_example_parses);
     RUN(language_fallback);
     RUN(minimal_and_open);
+    RUN(no_release);
     RUN(news_details);
     RUN(errors);
+    RUN(news_equal);
+    RUN(news_keep_index);
     return test_report();
 }

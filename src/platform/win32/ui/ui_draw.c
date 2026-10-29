@@ -2,6 +2,11 @@
  * ui_draw.c - Paints the active theme for the current launcher state (docs/theming.md):
  * window background, then every visible element in order, each with the resolved style of its
  * interaction state. Also the hit test that decides which elements react to the mouse.
+ *
+ * The theme is in logical pixels (96 DPI). g_ui.scale maps them to the window's device pixels in
+ * exactly two places: the world transform set in ui_draw (so rects, radii, borders, fonts and
+ * images all scale together, text and shapes rendered sharp at the final size) and the inverse
+ * mapping of the mouse point in ui_hit.
  */
 #include "core/display.h"
 #include "core/str.h"
@@ -187,7 +192,7 @@ int ui_enabled(int i)
     const theme_element *e = theme_element_at(&g_ui_theme, (uint32_t)i);
     if (!e) return 0;
     if (e->type != THEME_EL_BUTTON) return 1;
-    return display_action_enabled((theme_action)e->action, g_ui.state);
+    return display_action_enabled((theme_action)e->action, g_ui.state, g_ui.play_enabled);
 }
 
 static theme_state interaction(int i, const theme_element *e)
@@ -268,6 +273,10 @@ void ui_draw(GpGraphics *g)
     GdipSetInterpolationMode(g, GP_INTERPOLATION_HQ_BICUBIC);
     GdipSetPixelOffsetMode(g, GP_PIXEL_OFFSET_HALF);
     GdipGraphicsClear(g, argb(t->background | 0xFFu)); /* the window itself is opaque */
+    if (g_ui.scale && g_ui.scale != 100) {
+        float s = (float)g_ui.scale / 100.0f;
+        GdipScaleWorldTransform(g, s, s, GP_MATRIX_ORDER_PREPEND);
+    }
     draw_stretched(g, theme_image(t->background_image), 0, 0, t->width, t->height);
     frame_vars();
     for (i = 0; i < n; i++) {
@@ -280,6 +289,8 @@ int ui_hit(int x, int y)
 {
     const theme_model *t = &g_ui_theme;
     uint32_t i = theme_element_count(t);
+    x = display_unscaled(x, g_ui.scale);
+    y = display_unscaled(y, g_ui.scale);
     while (i--) {
         const theme_element *e = theme_element_at(t, i);
         if (!e || !theme_element_visible(e, g_ui.state)) continue;

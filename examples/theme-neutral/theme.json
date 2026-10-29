@@ -49,6 +49,7 @@
       "status.ready": "Ready to play.",
       "status.installing": "Downloading…",
       "status.error": "Something went wrong. Please try again.",
+      "status.no_release": "No version has been published yet.",
       "news.empty": "No news yet."
     },
     "es": {
@@ -62,6 +63,7 @@
       "status.ready": "Listo para jugar.",
       "status.installing": "Descargando…",
       "status.error": "Algo salió mal. Inténtalo de nuevo.",
+      "status.no_release": "Todavía no se ha publicado ninguna versión.",
       "news.empty": "Aún no hay noticias."
     }
   },

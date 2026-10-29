@@ -17,4 +17,9 @@ uint32_t proc_current_id(void);
  * longer exists), 0 on timeout. */
 int proc_wait_exit(uint32_t pid, uint32_t ms);
 
+/* Ends this process at once, without DLL detach notifications (unlike ExitProcess, which can
+ * hang when a killed thread held the loader or a heap lock). The kernel closes the handles and
+ * abandons the mutexes, so the single-instance lock is free for the next launcher. */
+void proc_terminate_self(int code);
+
 #endif

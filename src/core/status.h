@@ -65,6 +65,17 @@ const char *status_error_text(status_error error);
 /* Seconds until opening (0 if already due), or -1 when there is no opens_at. */
 int64_t status_seconds_to_open(const launcher_status *st);
 
+/* 1 if two news items show the same thing (image SHA-256 when present, title, link). */
+int status_news_item_equal(const status_news *a, const status_news *b);
+
+/* 1 if two news lists are equal item by item, in order. */
+int status_news_equal(const status_news *a, uint32_t a_count, const status_news *b, uint32_t b_count);
+
+/* Where a carousel showing old_items[old_index] goes when the list becomes items: the position
+ * of that same item in the new list; else old_index while it fits; else 0. */
+uint32_t status_news_keep_index(const status_news *old_items, uint32_t old_count, uint32_t old_index,
+                                const status_news *items, uint32_t count);
+
 /* "YYYY-MM-DDTHH:MM:SS[.fff]Z", years 1970-9999 -> Unix seconds. Returns 1 on success. */
 int utc_parse(const char *text, size_t len, int64_t *out);
 

@@ -5,6 +5,7 @@
 #define LAUNCHER_SYS_H
 
 #include <stddef.h>
+#include <stdint.h>
 
 /* Restricts the DLLs Windows loads later at run time (LoadLibrary calls, and the providers that
  * system DLLs such as Schannel, wintrust and GDI+ load on demand) to System32, so a DLL planted
@@ -25,6 +26,9 @@ void sys_language(char *out, size_t cap);
 
 /* Current UTC time as "YYYY-MM-DDTHH:MM:SSZ" (only for log lines, never for game logic). */
 void sys_utc_now(char out[21]);
+
+/* Milliseconds since the system started (wraps every 49.7 days; use differences). */
+uint32_t sys_ticks_ms(void);
 
 void sys_exit(int code);
 

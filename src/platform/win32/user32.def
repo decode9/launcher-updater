@@ -30,6 +30,7 @@ EXPORTS
     ReleaseCapture@0
     ScreenToClient@8
     GetSystemMetrics@4
+    SystemParametersInfoW@16
     SetForegroundWindow@4
     FindWindowW@8
     IsIconic@4

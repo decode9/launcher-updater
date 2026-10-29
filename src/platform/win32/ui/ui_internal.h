@@ -27,9 +27,11 @@ typedef struct {
     HDC back_dc;
     HBITMAP back_bitmap, back_old;
     int back_w, back_h;
+    uint32_t scale; /* percent: logical theme pixels -> device pixels (DPI, fitted to the work area) */
 
     /* what is shown */
     theme_launcher_state state;
+    int play_enabled;             /* 0: play buttons are disabled even in ready */
     uint64_t done, total;
     char status[UI_STATUS_BYTES]; /* "" = status.<state> */
     uint32_t countdown;           /* seconds left at countdown_tick */
@@ -70,7 +72,7 @@ GpFont *ui_res_font(int index); /* theme font index or -1; never 0 after ui_res_
 
 /* ui_draw.c */
 void ui_draw(GpGraphics *g);
-/* Element index at (x, y) that reacts to the mouse in the current state, or -1. */
+/* Element index at client point (x, y), in device pixels, that reacts to the mouse in the current state, or -1. */
 int ui_hit(int x, int y);
 /* Whether element i is enabled (buttons: play only when ready). */
 int ui_enabled(int i);

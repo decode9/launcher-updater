@@ -74,7 +74,37 @@ void display_countdown_split(uint32_t seconds, display_countdown *out)
     two(out->seconds, rest % 60);
 }
 
-int display_action_enabled(theme_action action, theme_launcher_state ls)
+int display_action_enabled(theme_action action, theme_launcher_state ls, int play_enabled)
 {
-    return action != THEME_ACT_PLAY || ls == THEME_LS_READY;
+    return action != THEME_ACT_PLAY || (ls == THEME_LS_READY && play_enabled);
+}
+
+uint32_t display_scale_from_dpi(uint32_t dpi)
+{
+    uint32_t pct;
+    if (dpi <= 96) return 100;
+    if (dpi > 96 * DISPLAY_SCALE_MAX / 100) return DISPLAY_SCALE_MAX;
+    pct = (dpi * 100 + 48) / 96;
+    return pct;
+}
+
+uint32_t display_scale_fit(uint32_t scale, uint32_t w, uint32_t h, uint32_t area_w, uint32_t area_h)
+{
+    /* scale * w <= area_w * 100 keeps the rounded scaled size within area_w (see display_scaled). */
+    if (area_w && w && area_w < 0x00FFFFFFu && scale * w > area_w * 100) scale = area_w * 100 / w;
+    if (area_h && h && area_h < 0x00FFFFFFu && scale * h > area_h * 100) scale = area_h * 100 / h;
+    return scale < DISPLAY_SCALE_MIN ? DISPLAY_SCALE_MIN : scale;
+}
+
+int display_scaled(int v, uint32_t scale)
+{
+    if (v <= 0) return v;
+    return (int)(((uint32_t)v * scale + 50) / 100);
+}
+
+int display_unscaled(int v, uint32_t scale)
+{
+    if (!scale) scale = 100;
+    if (v >= 0) return (int)((uint32_t)v * 100 / scale);
+    return -(int)(((uint32_t)-v * 100 + scale - 1) / scale);
 }

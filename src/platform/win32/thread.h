@@ -22,6 +22,10 @@ int thread_start(thread_handle *t, thread_fn fn, void *arg);
 /* Waits until the thread has returned and releases it. */
 void thread_join(thread_handle *t);
 
+/* Like thread_join, but waits at most ms milliseconds. Returns 1 if the thread has returned (or
+ * was never started), 0 on timeout (the thread keeps running and its handle stays open). */
+int thread_join_for(thread_handle *t, uint32_t ms);
+
 /* Auto-reset event, initially not set. Returns 1 on success. */
 int event_create(thread_event *e);
 void event_set(thread_event *e);

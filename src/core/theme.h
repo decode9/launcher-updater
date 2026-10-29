@@ -253,7 +253,8 @@ typedef struct {
 
 /* Expands {days} {hours} {minutes} {seconds} {percent} {version} {done} {total} in template
  * into out (always NUL-terminated when cap > 0). Unknown or unset variables and stray braces
- * are copied as they are. Returns 1, or 0 if the result was truncated. */
+ * are copied as they are; a template that uses a variable whose value is "" becomes "" (no
+ * "Version " label without a version). Returns 1, or 0 if the result was truncated. */
 int theme_format(const char *template_text, const theme_vars *vars, char *out, size_t cap);
 
 #endif

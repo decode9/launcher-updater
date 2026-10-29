@@ -29,12 +29,25 @@ typedef struct {
 } memory_sink;
 
 static char status_text[APP_STATUS_MAX];
+static volatile int quitting;
 
+void app_request_quit(void)
+{
+    quitting = 1;
+}
+
+int app_quitting(void)
+{
+    return quitting;
+}
+
+/* Sinks refuse more bytes once the launcher is closing: http_get then ends with
+ * HTTP_ERR_ABORTED at the next chunk. */
 static int to_memory(void *user, const uint8_t *data, size_t size)
 {
     memory_sink *m = user;
     size_t i;
-    if (size > m->cap - m->len) return 0;
+    if (quitting || size > m->cap - m->len) return 0;
     for (i = 0; i < size; i++) m->buf[m->len++] = (char)data[i];
     return 1;
 }
@@ -133,10 +146,12 @@ int app_fetch_status(void)
     http_target target = {app_config.server, app_config.port, app_config.fingerprint, 0};
     memory_sink sink = {status_text, sizeof status_text, 0};
     http_head head;
-    http_error e = http_get(&target, "/v1/status", 0, &head, to_memory, &sink);
+    http_error e;
     status_error se;
     char lang[8];
     strbuf *sb;
+    if (quitting) return 0;
+    e = http_get(&target, "/v1/status", 0, &head, to_memory, &sink);
     if (e != HTTP_OK) {
         sb = log_begin();
         sb_add(sb, "error: GET /v1/status: ");
@@ -331,7 +346,7 @@ typedef struct {
 static int to_blob(void *user, const uint8_t *data, size_t size)
 {
     blob_sink *b = user;
-    if (size > b->cap - b->len) return 0;
+    if (quitting || size > b->cap - b->len) return 0;
     memcpy(b->buf + b->len, data, size);
     b->len += size;
     return 1;
@@ -345,6 +360,7 @@ int app_fetch_blob(const uint8_t sha[SHA256_BYTES], uint64_t size, void *buf, si
     uint64_t got = 0;
     if (!app_ports_init() || (size != APP_SIZE_UNKNOWN && size > cap)) return 0;
     for (attempt = 0; attempt < INSTALL_NET_ATTEMPTS; attempt++) {
+        if (quitting) return 0;
         sink.len = 0;
         if (size == APP_SIZE_UNKNOWN ? install_port_fetch_whole(sha, to_blob, &sink, &got)
                                      : install_blobs.fetch(install_blobs.user, sha, size, 0, size, to_blob, &sink) ==

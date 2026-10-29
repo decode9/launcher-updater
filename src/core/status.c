@@ -128,11 +128,12 @@ status_error status_parse(launcher_status *st, const char *text, size_t len, jso
 {
     json_doc doc;
     uint64_t schema;
-    int opens_at, news, launcher, item;
+    int opens_at, news, release, launcher, item;
 
     st->news_count = 0;
     st->has_opens_at = 0;
     st->theme.present = st->release.present = st->launcher.present = 0;
+    st->theme.version[0] = st->release.version[0] = st->launcher.version[0] = 0;
 
     if (json_parse(&doc, text, len, tokens, cap) != JSON_OK || json_kind(&doc, 0) != JSON_OBJECT)
         return STATUS_ERR_JSON;
@@ -157,7 +158,9 @@ status_error status_parse(launcher_status *st, const char *text, size_t len, jso
     }
 
     if (!read_blob(&doc, json_get(&doc, 0, "theme"), 0, &st->theme)) return STATUS_ERR_BLOB;
-    if (!read_blob(&doc, json_get(&doc, 0, "release"), 1, &st->release)) return STATUS_ERR_BLOB;
+    release = json_get(&doc, 0, "release"); /* absent or null: nothing published yet */
+    if (release >= 0 && !json_is_null(&doc, release) && !read_blob(&doc, release, 1, &st->release))
+        return STATUS_ERR_BLOB;
     launcher = json_get(&doc, 0, "launcher");
     if (launcher >= 0 && !json_is_null(&doc, launcher) && !read_blob(&doc, launcher, 2, &st->launcher))
         return STATUS_ERR_BLOB;
@@ -184,4 +187,30 @@ int64_t status_seconds_to_open(const launcher_status *st)
     if (!st->has_opens_at) return -1;
     left = st->opens_at - st->server_time;
     return left > 0 ? left : 0;
+}
+
+int status_news_item_equal(const status_news *a, const status_news *b)
+{
+    return a->has_image == b->has_image && (!a->has_image || mem_eq(a->image, b->image, SHA256_BYTES)) &&
+           str_eq(a->title, b->title) && str_eq(a->link, b->link);
+}
+
+int status_news_equal(const status_news *a, uint32_t a_count, const status_news *b, uint32_t b_count)
+{
+    uint32_t i;
+    if (a_count != b_count) return 0;
+    for (i = 0; i < a_count; i++)
+        if (!status_news_item_equal(&a[i], &b[i])) return 0;
+    return 1;
+}
+
+uint32_t status_news_keep_index(const status_news *old_items, uint32_t old_count, uint32_t old_index,
+                                const status_news *items, uint32_t count)
+{
+    uint32_t i;
+    if (count == 0) return 0;
+    if (old_index < old_count)
+        for (i = 0; i < count; i++)
+            if (status_news_item_equal(&old_items[old_index], &items[i])) return i;
+    return old_index < count ? old_index : 0;
 }

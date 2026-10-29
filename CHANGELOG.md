@@ -21,6 +21,10 @@ heading matches the tag as the GitHub Release notes.
   `--install` exits with code `4` while another launcher works in the folder.
 - The release manifest is refused when a path ends in `.part`, a path is both a file and a folder
   (`a` and `a/b`), it has more than 1024 `patch` ops, or its sizes add up past 2^64.
+- Window scales with the system DPI (theme coordinates are logical pixels at 96 DPI) and is
+  shrunk to fit the work area, so the exit button is always reachable.
+- "No version has been published yet" state (theme key `status.no_release`) with Play disabled;
+  `/v1/status` may omit `release` or set it to `null`.
 
 ### Fixed
 
@@ -38,6 +42,13 @@ heading matches the tag as the GitHub Release notes.
 - Read-only files and a read-only `launcher.exe` are replaced and deleted (the read-only
   attribute is cleared after "access denied"); starting the new executable is retried three
   times in case an antivirus holds it.
+- A click on Play while the launcher polls the server is no longer lost, and Play asks the
+  server for a fresh status before installing or starting the game.
+- When the countdown has ended but the server is still closed, polls back off from 5 to 60
+  seconds with a random spread instead of every 5 seconds.
+- News images are reloaded only when the news list changes, and the carousel keeps its place.
+- Closing the window stops every download (theme, news, manifest, self-update, install) and the
+  process ends within about 3 seconds even if a connection hangs.
 
 ## [0.1.1] - 2026-10-27
 

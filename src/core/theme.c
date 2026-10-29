@@ -613,6 +613,10 @@ int theme_format(const char *template_text, const theme_vars *vars, char *out, s
             size_t n = (size_t)(close - p - 1);
             for (i = 0; i < 8 && !done; i++) {
                 if (values[i] && str_len(names[i]) == n && mem_eq(names[i], p + 1, n)) {
+                    if (!values[i][0]) { /* e.g. "v{version}" with no release: show nothing */
+                        out[0] = 0;
+                        return 1;
+                    }
                     sb_add(&sb, values[i]);
                     p = close + 1;
                     done = 1;

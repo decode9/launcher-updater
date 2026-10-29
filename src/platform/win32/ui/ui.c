@@ -4,6 +4,7 @@
  * by any spot that is not interactive (WM_NCHITTEST -> HTCAPTION), and the cross-thread
  * mailbox behind the ui_set_* calls (see ui.h).
  */
+#include "core/display.h"
 #include "core/str.h"
 #include "platform/win32/rt.h"
 #include "ui_internal.h"
@@ -33,13 +34,15 @@ enum {
     MAIL_NEWS = 1u << 4,
     MAIL_THEME = 1u << 5,
     MAIL_VERSION = 1u << 6,
-    MAIL_CLOSE = 1u << 7
+    MAIL_CLOSE = 1u << 7,
+    MAIL_PLAY = 1u << 8
 };
 
 static struct {
     int lock;
     uint32_t dirty;
     theme_launcher_state state;
+    int play_enabled;
     uint64_t done, total;
     char status[UI_STATUS_BYTES];
     uint32_t countdown;
@@ -74,6 +77,15 @@ void ui_set_state(theme_launcher_state state)
     g_box.state = state;
     g_box.status[0] = 0;
     g_box.dirty = (g_box.dirty | MAIL_STATE) & ~(uint32_t)MAIL_STATUS;
+    box_unlock();
+    box_post();
+}
+
+void ui_set_play_enabled(int enabled)
+{
+    box_lock();
+    g_box.play_enabled = enabled != 0;
+    g_box.dirty |= MAIL_PLAY;
     box_unlock();
     box_post();
 }
@@ -189,9 +201,15 @@ static void back_free(void)
     g_ui.back_w = g_ui.back_h = 0;
 }
 
+/* Logical theme pixels -> window (device) pixels. */
+static int device_px(int v)
+{
+    return display_scaled(v, g_ui.scale ? g_ui.scale : 100);
+}
+
 static int back_ensure(HDC screen)
 {
-    int w = g_ui_theme.width, h = g_ui_theme.height;
+    int w = device_px(g_ui_theme.width), h = device_px(g_ui_theme.height);
     if (g_ui.back_dc && g_ui.back_w == w && g_ui.back_h == h) return 1;
     back_free();
     g_ui.back_dc = CreateCompatibleDC(screen);
@@ -220,20 +238,55 @@ static void paint(void)
     EndPaint(g_ui.hwnd, &ps);
 }
 
-/* Size, corners and title of the active theme. Keeps the window's centre when it resizes. */
+typedef UINT(WINAPI *get_dpi_for_system_fn)(void);
+
+/* DPI of the system (the manifest declares the process system DPI aware, so it does not change
+ * while it runs): GetDpiForSystem from Windows 10 1607 on, else LOGPIXELSY of the screen. */
+static uint32_t system_dpi(void)
+{
+    static uint32_t dpi;
+    if (!dpi) {
+        HANDLE u32 = GetModuleHandleW(L"user32.dll");
+        get_dpi_for_system_fn get_dpi = u32 ? (get_dpi_for_system_fn)GetProcAddress(u32, "GetDpiForSystem") : 0;
+        if (get_dpi) dpi = get_dpi();
+        if (!dpi) {
+            HDC dc = GetDC(0);
+            int caps = dc ? GetDeviceCaps(dc, LOGPIXELSY) : 0;
+            if (dc) ReleaseDC(0, dc);
+            dpi = caps > 0 ? (uint32_t)caps : 96;
+        }
+    }
+    return dpi;
+}
+
+/* The primary monitor's area not covered by the taskbar (whole screen if unknown). */
+static void work_area(RECT *r)
+{
+    if (SystemParametersInfoW(SPI_GETWORKAREA, 0, r, 0) && r->right > r->left && r->bottom > r->top) return;
+    r->left = r->top = 0;
+    r->right = GetSystemMetrics(SM_CXSCREEN);
+    r->bottom = GetSystemMetrics(SM_CYSCREEN);
+}
+
+/* Size, corners and title of the active theme. The scale follows the system DPI, lowered so the
+ * whole window fits in the work area; the window is centred there when its size changes. */
 static void apply_window(int first)
 {
     static wchar_t title[256];
     const char *text = theme_title(&g_ui_theme, g_ui.lang);
-    int w = g_ui_theme.width, h = g_ui_theme.height, r = g_ui_theme.radius;
-    if (first) {
-        int x = (GetSystemMetrics(SM_CXSCREEN) - w) / 2, y = (GetSystemMetrics(SM_CYSCREEN) - h) / 2;
-        SetWindowPos(g_ui.hwnd, 0, x > 0 ? x : 0, y > 0 ? y : 0, w, h, SWP_NOZORDER | SWP_NOACTIVATE);
-    } else if (w != g_ui.back_w || h != g_ui.back_h) {
-        /* No GetWindowRect import: the old size is the back buffer's, the position is
-         * re-centred on the screen like at creation. */
-        int x = (GetSystemMetrics(SM_CXSCREEN) - w) / 2, y = (GetSystemMetrics(SM_CYSCREEN) - h) / 2;
-        SetWindowPos(g_ui.hwnd, 0, x > 0 ? x : 0, y > 0 ? y : 0, w, h, SWP_NOZORDER | SWP_NOACTIVATE);
+    RECT area;
+    int w, h, r;
+    work_area(&area);
+    g_ui.scale = display_scale_fit(display_scale_from_dpi(system_dpi()), g_ui_theme.width, g_ui_theme.height,
+                                   (uint32_t)(area.right - area.left), (uint32_t)(area.bottom - area.top));
+    w = device_px(g_ui_theme.width);
+    h = device_px(g_ui_theme.height);
+    r = device_px(g_ui_theme.radius);
+    /* No GetWindowRect import: the old size is the back buffer's. */
+    if (first || w != g_ui.back_w || h != g_ui.back_h) {
+        int x = area.left + (area.right - area.left - w) / 2, y = area.top + (area.bottom - area.top - h) / 2;
+        SetWindowPos(g_ui.hwnd, 0, x > area.left ? x : area.left, y > area.top ? y : area.top, w, h,
+                     SWP_NOZORDER | SWP_NOACTIVATE);
     }
     /* CreateRoundRectRgn takes the corner ellipse size; the +1 covers its exclusive edges. */
     SetWindowRgn(g_ui.hwnd, r ? CreateRoundRectRgn(0, 0, w + 1, h + 1, 2 * r, 2 * r) : 0, 1);
@@ -251,6 +304,7 @@ static void apply_mail(void)
         g_ui.state = g_box.state;
         g_ui.status[0] = 0;
     }
+    if (dirty & MAIL_PLAY) g_ui.play_enabled = g_box.play_enabled;
     if (dirty & MAIL_STATUS) str_copy(g_ui.status, sizeof g_ui.status, g_box.status);
     if (dirty & MAIL_PROGRESS) {
         g_ui.done = g_box.done;
@@ -261,10 +315,15 @@ static void apply_mail(void)
         g_ui.countdown_tick = g_box.countdown_tick;
     }
     if (dirty & MAIL_NEWS) {
+        /* The carousel stays on the item it shows while that item is still in the list. */
+        uint32_t index = status_news_keep_index(g_ui.news, g_ui.news_count, g_ui.news_index, g_box.news,
+                                                g_box.news_count);
+        int same = index < g_box.news_count && g_ui.news_index < g_ui.news_count &&
+                   status_news_item_equal(&g_ui.news[g_ui.news_index], &g_box.news[index]);
         g_ui.news_count = g_box.news_count;
         if (g_box.news_count) memcpy(g_ui.news, g_box.news, g_box.news_count * sizeof g_ui.news[0]);
-        g_ui.news_index = 0;
-        g_ui.news_tick = GetTickCount();
+        g_ui.news_index = index;
+        if (!same) g_ui.news_tick = GetTickCount();
     }
     if (dirty & MAIL_VERSION) str_copy(g_ui.version, sizeof g_ui.version, g_box.version);
     if (dirty & MAIL_THEME) memcpy(&g_ui_theme, &g_box_theme, sizeof g_ui_theme);
@@ -480,6 +539,7 @@ int ui_create(const theme_model *theme, const ui_config *cfg)
     g_ui.cfg = *cfg;
     g_ui.hover = g_ui.pressed = -1;
     g_ui.state = THEME_LS_CHECKING;
+    g_ui.play_enabled = 1;
     g_ui.news_tick = GetTickCount();
     g_ui.countdown_tick = GetTickCount();
     str_copy(g_ui.lang, sizeof g_ui.lang, cfg->lang && cfg->lang[0] ? cfg->lang : "en");

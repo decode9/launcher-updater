@@ -34,12 +34,18 @@ int thread_start(thread_handle *t, thread_fn fn, void *arg)
     return t->handle != 0;
 }
 
-void thread_join(thread_handle *t)
+int thread_join_for(thread_handle *t, uint32_t ms)
 {
-    if (!t->handle) return;
-    WaitForSingleObject(t->handle, INFINITE_WAIT);
+    if (!t->handle) return 1;
+    if (WaitForSingleObject(t->handle, (DWORD)ms) != WAIT_OBJECT_0) return 0;
     CloseHandle(t->handle);
     t->handle = 0;
+    return 1;
+}
+
+void thread_join(thread_handle *t)
+{
+    thread_join_for(t, INFINITE_WAIT);
 }
 
 int event_create(thread_event *e)

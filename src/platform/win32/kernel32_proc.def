@@ -7,6 +7,8 @@ EXPORTS
     SetEvent@4
     OpenProcess@12
     GetCurrentProcessId@0
+    GetCurrentProcess@0
+    TerminateProcess@8
     CreateProcessW@40
     Sleep@4
     CreateMutexW@12

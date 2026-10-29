@@ -116,6 +116,11 @@ void sys_utc_now(char out[21])
     out[20] = 0;
 }
 
+uint32_t sys_ticks_ms(void)
+{
+    return (uint32_t)GetTickCount();
+}
+
 void sys_exit(int code)
 {
     ExitProcess((unsigned)code);

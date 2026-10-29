@@ -267,7 +267,7 @@ existente se ve mal.
 
 ## Estado
 
-### Fase 1 · Urgentes — implementada, pendiente de visto bueno (2026-10-28)
+### Fase 1 · Urgentes — hecha, commit fd7966b (2026-10-28)
 - 1.1 Huérfanos (D-01): `retire_orphans` en `src/core/install.c`. Ajuste dentro de I-4: `state.json` guarda
   `owned` y solo se borran archivos entregados completos por una op `file`; los editados por `patch`/`line` se olvidan.
 - 1.2 DLL (D-02): `src/platform/win32/loadcfg.c` (load config propio, sin él lld ignora `/dependentloadflag`),
@@ -280,5 +280,40 @@ existente se ve mal.
   segunda ventana 0, sin launcher.json 1, DependentLoadFlags 0x800).
 - Sin verificar (requiere Windows real): DLL plantada ignorada, firma/revocación con exe firmado, traer al frente.
 
+### Fase 2 · Instalación robusta — hecha, commit 5a57a49 (2026-10-28)
+- 2.1 (D-07): `manifest.c` rechaza rutas `.part`, archivo+carpeta, >1024 patches y sumas que desbordan; las rutas
+  se comprueban una vez tras ordenarlas (heap sort sin malloc, 4096 ops en ~5 ms). `MANIFEST_PATCHES_MAX` en
+  `manifest.h`; `STATE_JOURNALS_MAX` lo usa.
+- 2.2 (D-06, D-08): puerto `probe`; `state.json` ilegible → `INSTALL_ERR_IO` sin escribir; corrupto → `.bad`.
+  Deshacer un journal calcula el hash y olvida la entrada si no coincide (coste: un hash completo por archivo
+  parcheado en cada actualización).
+- 2.3 (D-09, D-10): sin bucle de auto-actualización si el blob anunciado es el exe en ejecución; `fs_rename` /
+  `fs_remove` quitan el atributo de solo lectura tras «acceso denegado»; lanzar el `.new` se reintenta 3 veces.
+- Ajuste: la prueba de huérfanos de la fase 1 usaba una ruta `.part` en el manifest, ahora prohibida; se cambió.
+- Puerta: `tests/run.sh` verde; build 128 512 bytes; denylist limpio; Wine 6/6 (status, install con hashes,
+  archivo de solo lectura actualizado, `state.json` corrupto → `.bad`, manifest con `.part` rechazado sin tocar
+  nada, instalación limpia).
+
+### Fase 3 · Ventana — hecha (2026-10-29)
+- 3.1 (D-11): `src/core/flow.{h,c}` + `tests/test_flow.c` (22 pruebas). Sin fecha de apertura se sigue
+  consultando cada 5 min (como hoy); los reintentos 5→60 s + 0–25 % solo cuando la cuenta regresiva venció.
+- 3.2 (D-12): `window.c` es un adaptador del flujo; `display_action_enabled(..., play_enabled)` y
+  `ui_set_play_enabled`; `/v1/status` acepta `release` ausente o `null`; clave `status.no_release` (en/es).
+  Una plantilla con una variable vacía (p. ej. `v{version}` sin versión) no se dibuja.
+- 3.3 (H4, H7): las noticias solo se reenvían a la ventana si cambió la lista y el carrusel conserva su
+  noticia; bandera de salida única que corta descargas, reintentos y auto-actualización; al cerrar se espera
+  al worker 3 s y si no, `TerminateProcess` sobre sí mismo (seguro: todo lo escrito en disco es atómico o
+  con journal).
+- 3.4 (H5): escala por DPI del sistema con una transformación GDI+ en un solo punto; ratón desescalado en
+  `ui_hit`; la escala baja si la ventana no cabe en el área de trabajo (mín. 25 %). Capturas 100/150/200 %
+  revisadas (a 200 % en 1080 px baja a 180 % y se ve entera).
+- Puerta: `tests/run.sh` verde (schema validado con jsonschema en un entorno aparte); build 131 072 bytes;
+  denylist limpio; Wine 7/7: cuenta regresiva → abierto sin reiniciar, Play → instala → lanza el juego,
+  `--install` con ventana → 4, segunda ventana → 0, sin versión → texto y Play gris, cierre durante descarga
+  → proceso fuera en <1 s y la descarga se reanuda después.
+- Sin verificar (Windows real): clics a 150 %, per-monitor DPI (no soportado: solo DPI del sistema).
+
 ## Dónde retomar
-Fase 2 (tareas 2.1, 2.2 y 2.3 en paralelo) tras el visto bueno de la fase 1 y su commit.
+Las tres fases están hechas en la rama `robustez-0.2` (sin subir). Pendiente de tu confirmación: subir la rama,
+fusionarla en `main`, la etiqueta `v0.2.0` y la publicación del release. Antes de publicar conviene la prueba en
+Windows real (DLL plantada, firma con SignPath, traer al frente, DPI con clics).
