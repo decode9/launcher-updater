@@ -11,6 +11,7 @@
  * the launcher itself.
  */
 #include "core/display.h"
+#include "core/prefs.h"
 #include "core/str.h"
 #include "platform/win32/rt.h"
 #include "ui_internal.h"
@@ -604,23 +605,34 @@ static void menu_report(ui_menu_item item, const char *arg)
 }
 
 /* Every language of the theme, named by its own language.name (else its tag), the current one
- * checked. */
+ * checked. A tag the preferences cannot hold (prefs_lang_valid) is shown greyed out: choosing it
+ * would do nothing. TrackPopupMenu pumps messages, so a theme swap (g_ui_theme) may happen while
+ * the menu is open: the tags are copied first and the choice is reported from the copy. */
 static void language_menu(const theme_element *e)
 {
+    static char tags[THEME_MAX_LANGS][THEME_NAME_BYTES]; /* UI thread only */
     HMENU menu;
-    uint32_t i, n = g_ui_theme.lang_count;
+    uint32_t i, n = 0;
     UINT id;
-    if (!n || !g_ui.cfg.on_menu || !(menu = CreatePopupMenu())) return;
-    for (i = 0; i < n; i++) {
+    if (!g_ui.cfg.on_menu || !(menu = CreatePopupMenu())) return;
+    for (i = 0; i < g_ui_theme.lang_count && n < THEME_MAX_LANGS; i++) {
         const theme_lang *lang = &g_ui_theme.langs[i];
         const char *name = lang_name(lang);
-        menu_add(menu, str_eq(lang->name, g_ui.lang) ? MF_CHECKED : 0, MENU_LANG_BASE + i,
-                 name && name[0] ? name : lang->name);
+        UINT flags = str_eq(lang->name, g_ui.lang) ? MF_CHECKED : 0;
+        if (!lang->name[0]) continue;
+        if (!prefs_lang_valid(lang->name)) flags |= MF_GRAYED;
+        str_copy(tags[n], THEME_NAME_BYTES, lang->name);
+        menu_add(menu, flags, MENU_LANG_BASE + n, name && name[0] ? name : lang->name);
+        n++;
+    }
+    if (!n) {
+        DestroyMenu(menu);
+        return;
     }
     id = menu_track(menu, e);
     DestroyMenu(menu);
-    if (id >= MENU_LANG_BASE && id < MENU_LANG_BASE + n)
-        menu_report(UI_MENU_LANGUAGE, g_ui_theme.langs[id - MENU_LANG_BASE].name);
+    if (id >= MENU_LANG_BASE && id < MENU_LANG_BASE + n && prefs_lang_valid(tags[id - MENU_LANG_BASE]))
+        menu_report(UI_MENU_LANGUAGE, tags[id - MENU_LANG_BASE]);
 }
 
 static void options_menu(const theme_element *e)

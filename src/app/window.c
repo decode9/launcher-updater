@@ -62,6 +62,7 @@ static status_news g_news[STATUS_NEWS_MAX];      /* the list on screen */
 static status_news g_next_news[STATUS_NEWS_MAX]; /* the list being prepared */
 static uint32_t g_news_count;
 static int g_news_shown; /* g_news has been handed to the UI */
+static int g_status_online; /* app_status came from the server, not from the offline cache */
 
 static thread_event g_wake;
 static thread_handle g_worker;
@@ -197,8 +198,9 @@ static int image_on_screen(const uint8_t sha[SHA256_BYTES])
 }
 
 /* News whose image cannot be cached are shown without it (and retried on the next status).
- * The UI reloads every image when it gets a list, so an unchanged list is not sent again. */
-static void refresh_news(void)
+ * The UI reloads every image when it gets a list, so an unchanged list is not sent again.
+ * fetch_images = 0 never touches the network: only images already on screen are kept. */
+static void refresh_news(int fetch_images)
 {
     uint32_t i, n = app_status.news_count;
     status_news *item;
@@ -206,7 +208,8 @@ static void refresh_news(void)
     for (i = 0; i < n; i++) {
         item = &g_next_news[i];
         if (app_quitting()) return;
-        if (item->has_image && !image_on_screen(item->image) && !cache_fetch_blob(item->image, APP_SIZE_UNKNOWN))
+        if (item->has_image && !image_on_screen(item->image) &&
+            (!fetch_images || !cache_fetch_blob(item->image, APP_SIZE_UNKNOWN)))
             item->has_image = 0;
     }
     if (g_news_shown && status_news_equal(g_news, g_news_count, g_next_news, n)) return;
@@ -217,12 +220,16 @@ static void refresh_news(void)
 }
 
 /* Worker side of window_set_language: saves the choice and shows the news of the last status
- * in the new language (the UI already shows the theme texts in it). */
+ * in the new language (the UI already shows the theme texts in it). A cached status (offline)
+ * must not reach the network: as on the offline path, its news are not shown unless a list is
+ * on screen already, whose titles are then updated without fetching new images. */
 static void apply_language(void)
 {
     prefs_save();
     prefs_language(g_lang, sizeof g_lang);
-    if (app_reparse_status()) refresh_news();
+    if (!app_reparse_status()) return;
+    if (g_status_online) refresh_news(1);
+    else if (g_news_shown) refresh_news(0);
 }
 
 /* ---- play ----------------------------------------------------------------------------- */
@@ -324,9 +331,11 @@ static int fetch_facts(flow_facts *facts)
     const char *text;
     memset(facts, 0, sizeof *facts);
     if (!app_fetch_status()) {
+        g_status_online = 0;
         cached_facts(facts);
         return 1;
     }
+    g_status_online = 1;
     text = app_status_text(&len);
     if (!cache_save("status.json", text, len)) log_line("error: cannot cache status.json");
     if (!g_skip_update && selfupdate_available()) {
@@ -336,7 +345,7 @@ static int fetch_facts(flow_facts *facts)
     }
     refresh_theme();
     if (app_quitting()) return 1;
-    refresh_news();
+    refresh_news(1);
     ui_set_version(app_status.release.version);
     facts->reachable = facts->known = 1;
     facts->open = app_status.open;

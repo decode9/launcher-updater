@@ -20,9 +20,27 @@ TEST(lang_valid)
     CHECK(!prefs_lang_valid("-es"));
     CHECK(!prefs_lang_valid("es-"));
     CHECK(!prefs_lang_valid("1es"));
-    CHECK(!prefs_lang_valid("es_ES"));
+    CHECK(!prefs_lang_valid("es_"));
+    CHECK(!prefs_lang_valid("_es"));
+    CHECK(!prefs_lang_valid("es ES"));
     CHECK(!prefs_lang_valid("es\""));
     CHECK(!prefs_lang_valid("../x"));
+}
+
+/* Theme language names may use '_' ("pt_BR"): such a tag is valid and round-trips through
+ * the prefs document unescaped. */
+TEST(lang_underscore)
+{
+    char doc[PREFS_DOC_BYTES], lang[PREFS_LANG_BYTES];
+    size_t n;
+    CHECK(prefs_lang_valid("pt_BR"));
+    CHECK(prefs_lang_valid("es_ES"));
+    CHECK(prefs_lang_valid("zh_Hant-TW"));
+    n = prefs_format(doc, sizeof doc, "pt_BR");
+    CHECK(n > 0);
+    CHECK_STR(doc, "{\"lang\": \"pt_BR\"}\n");
+    CHECK(prefs_parse_lang(doc, n, tokens, 64, lang));
+    CHECK_STR(lang, "pt_BR");
 }
 
 TEST(parse_lang)
@@ -72,6 +90,7 @@ TEST(format)
 int main(void)
 {
     RUN(lang_valid);
+    RUN(lang_underscore);
     RUN(parse_lang);
     RUN(parse_tolerant);
     RUN(format);

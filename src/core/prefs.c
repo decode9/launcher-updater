@@ -9,14 +9,20 @@ static int is_letter(char c)
     return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
 }
 
+/* '-' and '_' join subtags ("pt-BR", "pt_BR"); neither needs escaping in JSON or a path. */
+static int is_separator(char c)
+{
+    return c == '-' || c == '_';
+}
+
 int prefs_lang_valid(const char *lang)
 {
     size_t i, n;
     if (!lang || !is_letter(lang[0])) return 0;
     n = str_len(lang);
-    if (n >= PREFS_LANG_BYTES || lang[n - 1] == '-') return 0;
+    if (n >= PREFS_LANG_BYTES || is_separator(lang[n - 1])) return 0;
     for (i = 0; i < n; i++)
-        if (!is_letter(lang[i]) && !(lang[i] >= '0' && lang[i] <= '9') && lang[i] != '-') return 0;
+        if (!is_letter(lang[i]) && !(lang[i] >= '0' && lang[i] <= '9') && !is_separator(lang[i])) return 0;
     return 1;
 }
 

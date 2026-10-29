@@ -24,7 +24,8 @@
 #define PREFS_DOC_BYTES (PREFS_LANG_BYTES + 16)
 
 /* 1 if lang is a usable language tag: 1..PREFS_LANG_BYTES-1 characters of ASCII letters,
- * digits and '-', starting with a letter and not ending with '-' ("es", "pt-BR"). */
+ * digits, '-' and '_', starting with a letter and not ending with '-' or '_' ("es", "pt-BR",
+ * "pt_BR"). Such a tag needs no escaping in the prefs document. */
 int prefs_lang_valid(const char *lang);
 
 /* The "lang" of a prefs document into out (PREFS_LANG_BYTES). Returns 1 if the document is an
