@@ -7,6 +7,8 @@ heading matches the tag as the GitHub Release notes.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-29
+
 ### Security
 
 - DLLs are only loaded from System32 (`DependentLoadFlags` in a load configuration directory, and

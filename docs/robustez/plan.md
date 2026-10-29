@@ -313,7 +313,24 @@ existente se ve mal.
   → proceso fuera en <1 s y la descarga se reanuda después.
 - Sin verificar (Windows real): clics a 150 %, per-monitor DPI (no soportado: solo DPI del sistema).
 
+### Cierre — verificación final (2026-10-29)
+- Wine de punta a punta 6/6 con `examples/dev-server`: `--status` 0; `--install` en carpeta vacía 0 con
+  los SHA-256 de `make-release.py`; segundo release con otras rutas deja la carpeta limpia y el archivo
+  del usuario intacto; `--install` con la ventana abierta 4; ventana → Play → instala → lanza
+  `fake-game`; auto-actualización 0.1.1 → 0.1.2 con `--swap` sin bucle, y caso D-09 con un solo
+  mensaje en el log y ninguna descarga.
+- Revisión del diff completo: sin hallazgos altos. Se corrigieron dos de `retire_orphans`:
+  - el `.part` de una descarga cortada cuya ruta sale del release quedaba para siempre: ahora la
+    ruta se registra como pendiente (hash cero) antes de descargar, y se borra su `.part`;
+  - un archivo que en el release siguiente pasa a carpeta (`a/b` → `a`) bloqueaba la instalación
+    con `INSTALL_ERR_IO`: ahora se quitan las carpetas que quedan vacías (puerto `remove_dir`,
+    `RemoveDirectoryW`, que solo borra carpetas vacías).
+  - además, el `.part` junto a un archivo que el launcher solo editó ya no se borra (no es suyo).
+- Puerta: `tests/run.sh` verde (`test_install` 24 pruebas; las dos nuevas fallan con el código
+  anterior); build 132 608 bytes; denylist limpio. `VERSION` 0.2.0 y sección `[0.2.0]` del CHANGELOG.
+
 ## Dónde retomar
-Las tres fases están hechas en la rama `robustez-0.2` (sin subir). Pendiente de tu confirmación: subir la rama,
-fusionarla en `main`, la etiqueta `v0.2.0` y la publicación del release. Antes de publicar conviene la prueba en
-Windows real (DLL plantada, firma con SignPath, traer al frente, DPI con clics).
+Todo lo del plan está hecho y la 0.2.0 está preparada en la rama `robustez-0.2` (sin subir).
+Pendiente de tu confirmación: fusionar en `main`, la etiqueta `v0.2.0`, subirlas y con eso la
+publicación del release. Antes de publicar conviene la prueba en Windows real (DLL plantada, firma
+con SignPath, traer al frente, DPI con clics).
