@@ -38,11 +38,17 @@ int fs_truncate(fs_file *f, uint64_t size);       /* end of file at size */
 
 /* File name of the running executable (e.g. "launcher.exe"). */
 int fs_exe_name(char *out, size_t cap);
+/* fs_rename and fs_remove clear a read-only attribute on the target and retry once. */
 int fs_rename(const char *from, const char *to);  /* atomic replace, write-through */
 int fs_make_parents(const char *path);            /* creates every folder above path */
 int fs_remove(const char *path);                  /* 1 also if it did not exist */
 int fs_free_space(const char *dir, uint64_t *bytes);
-/* Not reentrant: fs_rename and fs_make_parents use static UTF-16 buffers. */
+typedef enum { FS_PROBE_MISSING = 0, FS_PROBE_EXISTS, FS_PROBE_ERROR } fs_probe_result;
+/* Whether path exists, without opening it: MISSING only when Windows says the file or a folder
+ * above it is not there; anything else (locked, denied) is ERROR. */
+fs_probe_result fs_probe(const char *path);
+/* Not reentrant: fs_rename, fs_make_parents, fs_remove, fs_free_space and fs_probe use static
+ * UTF-16 buffers. */
 void fs_close(fs_file *f);
 
 #endif

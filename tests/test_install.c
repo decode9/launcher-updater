@@ -12,6 +12,7 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <glob.h>
 #include <stdlib.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -20,10 +21,15 @@
 
 static char root[256];
 static int dead, ops_left = -1; /* ops_left: mutating ops until death (-1 never) */
+/* A file that exists but cannot be opened (locked by another program); locked_probe_fails
+ * makes even the existence check fail. writes counts every operation that may change the disk. */
+static const char *locked;
+static int locked_probe_fails, writes;
 static uint64_t fake_free = (uint64_t)1 << 40;
 
 static int alive_op(void)
 {
+    writes++;
     if (dead) return 0;
     if (ops_left == 0) {
         dead = 1;
@@ -43,7 +49,8 @@ static int p_open(void *u, const char *path, install_open_mode mode, void **file
     char n[600];
     int fd;
     (void)u;
-    if (dead) return 0;
+    if (dead || (locked && strcmp(path, locked) == 0)) return 0;
+    if (mode == INSTALL_OPEN_WRITE) writes++;
     native(n, path);
     fd = open(n, mode == INSTALL_OPEN_READ ? O_RDONLY : O_RDWR | O_CREAT, 0644);
     if (fd < 0) return 0;
@@ -91,6 +98,7 @@ static int p_make_parents(void *u, const char *path)
     size_t i;
     (void)u;
     if (dead) return 0;
+    writes++;
     native(n, path);
     for (i = strlen(root) + 1; n[i]; i++) {
         if (n[i] != '/') continue;
@@ -115,8 +123,18 @@ static int p_free(void *u, uint64_t *bytes)
     return 1;
 }
 
+static install_probe_result p_probe(void *u, const char *path)
+{
+    char n[600];
+    (void)u;
+    if (dead || (locked && strcmp(path, locked) == 0 && locked_probe_fails)) return INSTALL_PROBE_ERROR;
+    native(n, path);
+    if (access(n, F_OK) == 0) return INSTALL_PROBE_EXISTS;
+    return errno == ENOENT ? INSTALL_PROBE_MISSING : INSTALL_PROBE_ERROR;
+}
+
 static const install_fs posix_fs = {0, p_open, p_read, p_write, p_seek, p_size, p_truncate, p_flush, p_close,
-                                    p_rename, p_make_parents, p_remove, p_free};
+                                    p_rename, p_make_parents, p_remove, p_free, p_probe};
 
 /* ---- in-memory blob store ---- */
 
@@ -243,6 +261,8 @@ static void fresh_root(void)
     dead = 0;
     ops_left = fetches_left = corrupt_fetch = -1;
     fetch_count = 0;
+    locked = 0;
+    locked_probe_fails = 0;
 }
 
 static int file_has(const char *path, const uint8_t *data, size_t size)
@@ -360,6 +380,143 @@ TEST(crash_between_append_and_writes_and_between_writes)
         ops_left = -1;
         CHECK(install_run(&ctx, &manifest, &result) == INSTALL_OK);
         check_release_a();
+    }
+}
+
+/* Same as above, for the A -> B update: every crash while undoing A's journal (restore, hash,
+ * save, drop) or applying B must leave a state the next run finishes. */
+TEST(crash_at_every_file_operation_of_an_update_recovers)
+{
+    int n, finished = 0;
+    for (n = 0; !finished && n < 400; n++) {
+        fresh_root();
+        make_manifest('A', 1);
+        CHECK(install_run(&ctx, &manifest, &result) == INSTALL_OK);
+        make_manifest('B', 1);
+        ops_left = n;
+        finished = install_run(&ctx, &manifest, &result) == INSTALL_OK && !dead;
+        dead = 0;
+        ops_left = -1;
+        if (install_run(&ctx, &manifest, &result) != INSTALL_OK) {
+            fprintf(stderr, "crash at op %d: rerun failed: %s (%s)\n", n, install_error_text(result.error), result.path);
+            CHECK(0);
+            break;
+        }
+        CHECK(file_has("data/big.pak", result_b, sizeof result_b));
+        CHECK(file_has("cfg.ini", (const uint8_t *)"Server=B.example\r\n", 18));
+    }
+    CHECK(finished);
+    CHECK(n > 10);
+}
+
+static size_t journal_files(void)
+{
+    char pattern[600];
+    glob_t g;
+    size_t n;
+    native(pattern, MANIFEST_STATE_DIR "/j-*.jnl");
+    if (glob(pattern, 0, 0, &g)) return 0;
+    n = g.gl_pathc;
+    globfree(&g);
+    return n;
+}
+
+static size_t read_native(const char *path, uint8_t *buf, size_t cap)
+{
+    char n[600];
+    FILE *f;
+    size_t got;
+    native(n, path);
+    f = fopen(n, "rb");
+    if (!f) return 0;
+    got = fread(buf, 1, cap, f);
+    fclose(f);
+    return got;
+}
+
+/* A state.json that exists but cannot be read now (locked) stops the run before anything is
+ * written; once readable again its journals still take the update through the base. */
+TEST(unreadable_state_writes_nothing)
+{
+    static uint8_t before[16384], after[16384];
+    size_t len;
+    int pass;
+    fresh_root();
+    make_manifest('A', 1);
+    CHECK(install_run(&ctx, &manifest, &result) == INSTALL_OK);
+    len = read_native(INSTALL_STATE_FILE, before, sizeof before);
+    CHECK(len > 0);
+    make_manifest('B', 1);
+    for (pass = 0; pass < 2; pass++) { /* exists but cannot be opened; existence unknown */
+        locked = INSTALL_STATE_FILE;
+        locked_probe_fails = pass;
+        writes = 0;
+        CHECK(install_run(&ctx, &manifest, &result) == INSTALL_ERR_IO);
+        CHECK_STR(result.path, INSTALL_STATE_FILE);
+        CHECK_EQ_U64(result.downloaded, 0);
+        CHECK(!install_is_current(&ctx, "rel-A"));
+        CHECK(!install_is_interrupted(&ctx));
+        CHECK_EQ_U64(writes, 0);
+    }
+    locked = 0;
+    CHECK(read_native(INSTALL_STATE_FILE, after, sizeof after) == len && memcmp(before, after, len) == 0);
+    CHECK(!exists(INSTALL_STATE_BAD));
+    check_release_a();
+    CHECK(install_is_current(&ctx, "rel-A"));
+    CHECK(install_run(&ctx, &manifest, &result) == INSTALL_OK);
+    CHECK(file_has("data/big.pak", result_b, sizeof result_b));
+    CHECK_EQ_U64(result.downloaded, 200); /* A's journal survived: only B's tail */
+}
+
+/* A corrupt state.json is kept aside as state.json.bad (replacing an older one) and the
+ * install goes on from an empty state. */
+TEST(corrupt_state_is_kept_as_bad)
+{
+    fresh_root();
+    make_manifest('A', 1);
+    write_file(INSTALL_STATE_BAD, "old", 3);
+    write_file(INSTALL_STATE_FILE, "{\"schema\":1,\"files\":[", 22);
+    CHECK(!install_is_current(&ctx, "rel-A"));
+    CHECK(!install_is_interrupted(&ctx));
+    CHECK(file_has(INSTALL_STATE_FILE, (const uint8_t *)"{\"schema\":1,\"files\":[", 22)); /* queries never rename */
+    CHECK(install_run(&ctx, &manifest, &result) == INSTALL_OK);
+    CHECK(result.state_reset);
+    CHECK(file_has(INSTALL_STATE_BAD, (const uint8_t *)"{\"schema\":1,\"files\":[", 22));
+    check_release_a();
+    CHECK(install_run(&ctx, &manifest, &result) == INSTALL_OK);
+    CHECK(result.fast_path);
+    CHECK(!result.state_reset);
+}
+
+/* A patched file edited outside the launcher (bytes the journal does not cover): undoing the
+ * journal does not give back the base, so the entry is forgotten instead of trusted. */
+TEST(restored_file_edited_outside_is_forgotten)
+{
+    static uint8_t edited[sizeof result_a], base_edited[sizeof big_a];
+    static char only[16384];
+    int with_file;
+    for (with_file = 1; with_file >= 0; with_file--) {
+        fresh_root();
+        make_manifest('A', 1);
+        CHECK(install_run(&ctx, &manifest, &result) == INSTALL_OK);
+        memcpy(edited, result_a, sizeof edited);
+        edited[500] ^= 0x5a;
+        write_file("data/big.pak", edited, sizeof edited);
+        memcpy(base_edited, big_a, sizeof base_edited);
+        base_edited[500] ^= 0x5a;
+        make_manifest('B', 1);
+        if (with_file) { /* the file op downloads it again, then the patch applies */
+            CHECK(install_run(&ctx, &manifest, &result) == INSTALL_OK);
+            CHECK(file_has("data/big.pak", result_b, sizeof result_b));
+            CHECK_EQ_U64(result.downloaded, 3500 + 200);
+        } else { /* patch only: refused, the restored file is left as it is */
+            snprintf(only, sizeof only, "{\"schema\":1,\"version\":\"rel-X\",\"ops\":[%s",
+                     strstr(text, "{\"op\":\"patch\""));
+            CHECK(manifest_parse(&manifest, only, strlen(only), tokens, 4096, "launcher.exe", 0) == MANIFEST_OK);
+            CHECK(install_run(&ctx, &manifest, &result) == INSTALL_ERR_BASE);
+            CHECK(file_has("data/big.pak", base_edited, sizeof base_edited));
+            CHECK(journal_files() == 0);
+        }
     }
 }
 
@@ -521,13 +678,12 @@ TEST(orphans_deleted_user_files_kept)
     write_file("a/user.sav", "save", 4);    /* never written by the launcher */
     write_file("a/1.part", "half", 4);      /* abandoned download of an orphan */
     write_file("a/2", "changed", 7);        /* managed, but rewritten by the game */
-    write_file("a/3.part", "x", 1);         /* becomes a file of r2 below */
-    make_many("r2", 'b', 2, "{\"op\":\"line\",\"path\":\"a/3.part\",\"prefix\":\"K=\",\"line\":\"K=1\"}");
+    write_file("a/3.part", "x", 1);         /* stray temporary of an orphan (".part" paths are never managed) */
+    make_many("r2", 'b', 2, "");
     CHECK(install_run(&ctx, &manifest, &result) == INSTALL_OK);
-    CHECK(!exists("a/0") && !exists("a/1") && !exists("a/1.part") && !exists("a/3"));
+    CHECK(!exists("a/0") && !exists("a/1") && !exists("a/1.part") && !exists("a/3") && !exists("a/3.part"));
     CHECK(file_has("a/user.sav", (const uint8_t *)"save", 4));
     CHECK(file_has("a/2", (const uint8_t *)"changed", 7));
-    CHECK(file_has("a/3.part", (const uint8_t *)"x\r\nK=1\r\n", 8));
     CHECK(exists("b/0") && exists("b/1"));
     CHECK(state_count("\"a/2\"") == 0);
     CHECK(install_is_current(&ctx, "r2"));
@@ -698,6 +854,10 @@ int main(void)
     RUN(crash_at_every_file_operation_recovers);
     RUN(crash_in_every_download_resumes);
     RUN(crash_between_append_and_writes_and_between_writes);
+    RUN(crash_at_every_file_operation_of_an_update_recovers);
+    RUN(unreadable_state_writes_nothing);
+    RUN(corrupt_state_is_kept_as_bad);
+    RUN(restored_file_edited_outside_is_forgotten);
     RUN(wrong_base_is_refused_without_touching);
     RUN(corrupt_chunk_fails_and_no_final_file);
     RUN(release_a_to_b_goes_through_the_base);

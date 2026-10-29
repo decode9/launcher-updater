@@ -9,7 +9,9 @@
  *  - schema is not 1, version is empty or too long, or an op has an unknown "op";
  *  - a path breaks path_is_safe_relative, or names the launcher itself: its executable
  *    (self_exe), launcher.json, launcher.log or anything under the state folder .launcher/
- *    (compared without ASCII case, as Windows does);
+ *    (compared without ASCII case, as Windows does), or ends in ".part" (the engine's download
+ *    name for <path>);
+ *  - one path is a folder of another ("a" and "a/b", without case): MANIFEST_ERR_TREE;
  *  - a hash is not 64 lowercase hex digits;
  *  - file: chunks do not add up to size, a chunk is empty or larger than 8 MiB, or a file of
  *    size 0 has chunks (a file with size 0 and no chunks is valid: an empty file);
@@ -17,7 +19,9 @@
  *    result_size != base_size + append.size ("append" may be absent: nothing appended);
  *  - line: prefix or line contains CR or LF;
  *  - order: a file op on a path that an earlier op already touched, more than one patch on a
- *    path, or any op on a path after its patch (the journal can only undo one patch per file).
+ *    path, or any op on a path after its patch (the journal can only undo one patch per file);
+ *  - more than MANIFEST_PATCHES_MAX patch ops (one journal each), or the file sizes plus patch
+ *    append sizes (the most the install can download) overflow 64 bits.
  */
 #ifndef LAUNCHER_CORE_MANIFEST_H
 #define LAUNCHER_CORE_MANIFEST_H
@@ -33,6 +37,7 @@
 #define MANIFEST_OPS_MAX 4096
 #define MANIFEST_CHUNKS_MAX 32768
 #define MANIFEST_WRITES_MAX 16384
+#define MANIFEST_PATCHES_MAX 1024 /* = STATE_JOURNALS_MAX: one journal per patch */
 #define MANIFEST_POOL_BYTES (2u << 20)
 #define MANIFEST_CHUNK_MAX_BYTES (8u << 20)
 
@@ -68,6 +73,7 @@ typedef struct {
     char version[MANIFEST_VERSION_BYTES];
     uint32_t op_count, chunk_count, write_count, pool_len;
     manifest_op ops[MANIFEST_OPS_MAX];
+    uint32_t sorted[MANIFEST_OPS_MAX]; /* validation scratch: op indices sorted by path */
     manifest_blob chunks[MANIFEST_CHUNKS_MAX];
     manifest_write writes[MANIFEST_WRITES_MAX];
     uint8_t pool[MANIFEST_POOL_BYTES];
@@ -85,7 +91,8 @@ typedef enum {
     MANIFEST_ERR_WRITE,    /* patch write outside the base or bad hex */
     MANIFEST_ERR_LINE,
     MANIFEST_ERR_ORDER,
-    MANIFEST_ERR_LIMIT     /* more ops/chunks/writes/bytes than the model holds */
+    MANIFEST_ERR_LIMIT,    /* more ops/chunks/writes/bytes/patches than the model holds */
+    MANIFEST_ERR_TREE      /* a path is a folder of another path */
 } manifest_error;
 
 /* self_exe: file name of the running launcher (e.g. "launcher.exe"), compared without case.

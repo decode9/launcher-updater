@@ -199,16 +199,50 @@ static int file_is(const char *path, const manifest_blob *blob, install_error *e
 
 /* ---- state.json ------------------------------------------------------------------------- */
 
-/* Loads state.json; 0 (and an empty state) when it is missing or unreadable. */
-static int load_state(void)
+typedef enum {
+    LOAD_OK = 0,     /* state.json read and parsed */
+    LOAD_MISSING,    /* no state.json: empty state */
+    LOAD_CORRUPT,    /* read but not a valid state (too large or bad JSON): empty state */
+    LOAD_UNREADABLE  /* there but cannot be read right now: empty state, must not be overwritten */
+} load_result;
+
+/* Loads state.json into `state` (left empty unless LOAD_OK). Reads only: it never writes. */
+static load_result load_state(void)
 {
     size_t len;
-    if (read_whole(INSTALL_STATE_FILE, (uint8_t *)state_text, sizeof state_text, &len) != 1 ||
-        !state_parse(&state, state_text, len, state_tokens, STATE_TOKENS_MAX)) {
-        state_clear(&state);
-        return 0;
+    int r;
+    state_clear(&state);
+    switch (cx->fs->probe(cx->fs->user, INSTALL_STATE_FILE)) {
+    case INSTALL_PROBE_MISSING: return LOAD_MISSING;
+    case INSTALL_PROBE_EXISTS: break;
+    default: return LOAD_UNREADABLE;
     }
-    return 1;
+    r = read_whole(INSTALL_STATE_FILE, (uint8_t *)state_text, sizeof state_text, &len);
+    if (r == -2) return LOAD_CORRUPT;
+    if (r != 1) return LOAD_UNREADABLE; /* exists, yet cannot be opened or read */
+    if (!state_parse(&state, state_text, len, state_tokens, STATE_TOKENS_MAX)) {
+        state_clear(&state);
+        return LOAD_CORRUPT;
+    }
+    return LOAD_OK;
+}
+
+/* install_run's load: an unreadable state stops the run before anything is written (its lists
+ * of journals and managed files would be lost); a corrupt one is kept aside as state.json.bad
+ * (replacing an older one) and the run starts from an empty state, as with no state at all. */
+static install_error load_state_for_run(void)
+{
+    switch (load_state()) {
+    case LOAD_OK:
+    case LOAD_MISSING: return INSTALL_OK;
+    case LOAD_CORRUPT:
+        if (!cx->fs->rename(cx->fs->user, INSTALL_STATE_FILE, INSTALL_STATE_BAD)) break;
+        res->state_reset = 1;
+        return INSTALL_OK;
+    case LOAD_UNREADABLE: break;
+    }
+    str_copy(res->path, sizeof res->path, INSTALL_STATE_FILE);
+    return INSTALL_ERR_IO;
 }
 
 static install_error save_state(void)
@@ -248,12 +282,17 @@ static int restore(void *f, const journal_view *v)
     return cx->fs->flush(f);
 }
 
-/* Puts path back to the base recorded in its journal, then drops the journal. A journal that
- * is missing or torn was never acted on (it is complete on disk before the file is touched),
- * so the file is only forgotten: the next steps re-verify it by hashing. */
+/* Puts path back to the base recorded in its journal, hashes it, then drops the journal. The
+ * state entry is set to the base only when the hash proves it: a file edited outside the
+ * launcher (bytes the journal does not cover) is forgotten instead, so the next `file` op
+ * downloads it and the next `patch` refuses it. A journal that is missing or torn was never
+ * acted on (it is complete on disk before the file is touched), so the file is only forgotten:
+ * the next steps re-verify it by hashing. Restore -> hash -> record -> save -> drop: a run
+ * killed half way restores and hashes again, with the same outcome. */
 static install_error undo_journal(const char *path)
 {
     char name[64];
+    uint8_t digest[SHA256_BYTES];
     journal_view v;
     size_t len;
     uint64_t size;
@@ -268,6 +307,9 @@ static install_error undo_journal(const char *path)
         known = restore(f, &v);
         cx->fs->close(f);
         if (!known) return INSTALL_ERR_IO; /* journal kept: retried next time */
+        e = hash_file(path, &size, digest);
+        if (e) return e; /* journal kept: restored and hashed again next time */
+        known = size == v.base_size && mem_eq(digest, v.base_sha256, SHA256_BYTES);
     }
     if (known) {
         if (!state_set(&state, path, v.base_sha256, v.base_size)) return INSTALL_ERR_STATE;
@@ -732,8 +774,8 @@ static install_error run(const release_manifest *m)
 {
     uint64_t need, free_bytes;
     uint32_t k;
-    install_error e;
-    load_state();
+    install_error e = load_state_for_run();
+    if (e) return e;
     if (is_current(m->version)) {
         res->fast_path = 1;
         return INSTALL_OK;
@@ -780,7 +822,7 @@ install_error install_run(const install_ctx *ctx, const release_manifest *m, ins
     res->op = -1;
     res->path[0] = 0;
     res->need = res->free = res->downloaded = 0;
-    res->fast_path = 0;
+    res->fast_path = res->state_reset = 0;
     dl_done = dl_total = 0;
     last_phase = INSTALL_PHASE_DONE;
     last_done = 0;
@@ -792,14 +834,13 @@ install_error install_run(const install_ctx *ctx, const release_manifest *m, ins
 int install_is_current(const install_ctx *ctx, const char *version)
 {
     cx = ctx;
-    load_state();
-    return is_current(version);
+    return load_state() == LOAD_OK && is_current(version);
 }
 
 int install_is_interrupted(const install_ctx *ctx)
 {
     cx = ctx;
-    return load_state() && !state.release[0];
+    return load_state() == LOAD_OK && !state.release[0];
 }
 
 const char *install_error_text(install_error error)

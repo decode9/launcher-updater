@@ -88,6 +88,11 @@ from `launcher.json`.
   A `file` op must be the first op on its path, a path has at most one `patch`, and nothing may
   follow the `patch` on the same path (the journal undoes exactly one patch per file); the
   launcher rejects a manifest that breaks this. Paths are compared without ASCII case.
+- **Path set**: no path may also be a folder of another path (`a` with `a/b`, without ASCII
+  case), and no path may end in `.part` (the launcher's download name for `<path>.part`).
+- **Limits**: at most 4096 ops and 1024 `patch` ops (one journal each); the sum of every `file`
+  `size` and every `patch` `append.size` must fit in 64 bits. A manifest over a limit is
+  rejected whole.
 - **Reserved paths**: besides the executable and `launcher.json`, `<exe>.new` (the self-update
   file), `launcher.log` and anything under `.launcher/` (the launcher's state folder) are
   rejected. A path component with an 8.3 short-name alias (`~` followed by a digit, as in
@@ -114,7 +119,12 @@ from `launcher.json`.
   and whose size on disk is unchanged is not hashed again. An entry carries `"owned": true` when
   a `file` op delivered the file (only those may be deleted later); the member is optional and
   absent means not owned, so state files from earlier launchers keep loading. The same release
-  with all sizes unchanged means there is nothing to do.
+  with all sizes unchanged means there is nothing to do. A `state.json` that exists but cannot be
+  read right now (locked, I/O error) stops the install with nothing written, so a later attempt
+  still finds it; one that is read but corrupt is moved to `.launcher/state.json.bad` and the
+  install starts from an empty state. When a patch journal is undone, the restored file is
+  hashed: if it is not the journal's base (edited outside the launcher), its entry is dropped
+  instead of trusted, so a `file` op downloads it again and a `patch` op refuses it.
 
 ## Launcher flow
 Informative (behaviour of this launcher, not part of the wire contract). Started without
@@ -154,6 +164,11 @@ Extra status texts (theme keys, with built-in English fallbacks): `status.update
 ## Self-update
 When `launcher.version` in `/v1/status` is greater (X.Y.Z) than the running version:
 
+0. If the SHA-256 of the running executable (read from disk) equals the announced `launcher`
+   blob's, the blob is already running: the announced version does not match its content
+   (e.g. 0.2.0 announced, a 0.1.1 build published). The launcher logs an error once per start
+   and does not update; otherwise it would download, swap and restart into the same check on
+   every start. Nothing is stored; publishing a correct blob (or version) fixes it.
 1. Download the `launcher` blob; its size and SHA-256 must match the pinned status.
 2. Write it as `<exe>.new` next to the executable (through `.part` and a rename).
 3. Signer. If the running executable is unsigned (beta builds), the SHA-256 from the pinned
@@ -172,11 +187,16 @@ When `launcher.version` in `/v1/status` is greater (X.Y.Z) than the running vers
    signer is SignPath Foundation for every project it signs, so another project signed by it
    would pass this step. The main protection remains the SHA-256 (and size) from the status,
    which is fetched over the pinned TLS connection; the signature is a second layer.
-4. Start `<exe>.new --swap <pid>` and exit.
+4. Start `<exe>.new --swap <pid>` (up to 3 retries, 500 ms apart: an antivirus may hold the
+   fresh file) and exit.
 5. The new process waits for `<pid>` to exit (up to 60 s), renames itself over `<exe>`
    (40 attempts, 250 ms apart), starts `<exe> --skip-update` and exits. `--skip-update` limits
    self-update to one step per start, so a wrongly announced version cannot loop.
 6. A normal start removes a leftover `<exe>.new`.
+
+Replacing or removing a file (the executable here, game files during an install) that has the
+read-only attribute fails with "access denied" on Windows; the launcher then clears only that
+attribute and retries once.
 
 Any failure keeps the running version, which carries on and logs why. A theme whose
 `min_launcher_version` is greater than the running version is only used after an update.

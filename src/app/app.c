@@ -408,6 +408,7 @@ int app_install_release(install_progress_fn progress, void *user, volatile const
     sb_add(sb, " ops");
     log_end();
     install_run(&ctx, &manifest, &result);
+    if (result.state_reset) log_line("install: " INSTALL_STATE_FILE " was corrupt, kept as " INSTALL_STATE_BAD);
     sb = log_begin();
     if (result.error == INSTALL_OK) {
         sb_add(sb, "install: done, downloaded ");

@@ -19,6 +19,8 @@ heading matches the tag as the GitHub Release notes.
 
 - Single instance per folder: a second window brings the running one to the front;
   `--install` exits with code `4` while another launcher works in the folder.
+- The release manifest is refused when a path ends in `.part`, a path is both a file and a folder
+  (`a` and `a/b`), it has more than 1024 `patch` ops, or its sizes add up past 2^64.
 
 ### Fixed
 
@@ -26,6 +28,16 @@ heading matches the tag as the GitHub Release notes.
   release that the new one does not mention are deleted at the start of the install. Only files
   the launcher delivered whole (`file` ops) are deleted; files it only edited are kept.
 - A launcher refused by the single-instance lock can still write to `launcher.log`.
+- A `state.json` that exists but cannot be read (held by an antivirus) stops the install without
+  writing anything, instead of being replaced by an empty state; a corrupt one is kept as
+  `state.json.bad`.
+- Undoing a patch journal hashes the file; a file edited outside the launcher is no longer taken
+  as the base.
+- Self-update no longer loops when the announced blob is the running executable (wrong version
+  published); the error is logged once.
+- Read-only files and a read-only `launcher.exe` are replaced and deleted (the read-only
+  attribute is cleared after "access denied"); starting the new executable is retried three
+  times in case an antivirus holds it.
 
 ## [0.1.1] - 2026-10-27
 

@@ -32,12 +32,16 @@ typedef long long LONGLONG;
 #define OPEN_EXISTING 3
 #define OPEN_ALWAYS 4
 #define FILE_ATTRIBUTE_NORMAL 0x80
+#define FILE_ATTRIBUTE_READONLY 0x1
+#define FILE_ATTRIBUTE_DIRECTORY 0x10
+#define INVALID_FILE_ATTRIBUTES ((DWORD)-1)
 #define FILE_BEGIN 0
 #define FILE_END 2
 #define MOVEFILE_REPLACE_EXISTING 1
 #define MOVEFILE_WRITE_THROUGH 8
 #define ERROR_FILE_NOT_FOUND 2
 #define ERROR_PATH_NOT_FOUND 3
+#define ERROR_ACCESS_DENIED 5
 #define CP_UTF8 65001
 #define MB_ERR_INVALID_CHARS 8
 #define LOCALE_USER_DEFAULT 0x0400
@@ -62,6 +66,8 @@ IMPORT BOOL WINAPI SetEndOfFile(HANDLE);
 IMPORT BOOL WINAPI MoveFileExW(const wchar_t *, const wchar_t *, DWORD);
 IMPORT BOOL WINAPI CreateDirectoryW(const wchar_t *, void *);
 IMPORT BOOL WINAPI DeleteFileW(const wchar_t *);
+IMPORT DWORD WINAPI GetFileAttributesW(const wchar_t *);
+IMPORT BOOL WINAPI SetFileAttributesW(const wchar_t *, DWORD);
 IMPORT BOOL WINAPI GetDiskFreeSpaceExW(const wchar_t *, LONGLONG *, LONGLONG *, LONGLONG *);
 IMPORT void WINAPI GetSystemTime(SYSTEMTIME *);
 IMPORT DWORD WINAPI GetTickCount(void);

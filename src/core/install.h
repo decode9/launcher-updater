@@ -6,12 +6,20 @@
  * to the launcher folder, '/' separated); the port maps them to native ones.
  *
  * What install_run does, in order:
+ *   0. Loads state.json. Missing -> empty state. Present but unreadable right now (locked by
+ *      an antivirus, I/O error) -> INSTALL_ERR_IO with result.path = the state file and nothing
+ *      written at all (retried on the next run). Readable but corrupt -> renamed to
+ *      .launcher/state.json.bad (result.state_reset = 1) and the run goes on from an empty state.
  *   1. Fast path: state.json says this release is complete and every managed file still has
  *      its size on disk -> nothing to do.
  *   2. Marks the install as under way, then undoes every patch journal listed in the state:
  *      the half-done patch of an interrupted install and the applied patches of the previous
- *      release alike (truncate to the base size, restore old bytes in reverse order). Releases
- *      are always applied from the base.
+ *      release alike (truncate to the base size, restore old bytes in reverse order), then
+ *      hashes the restored file: only if it is the journal's base is the state entry set to the
+ *      base; otherwise (edited outside the launcher) the entry is forgotten, so the next `file`
+ *      op downloads it again and the next `patch` fails with INSTALL_ERR_BASE. Restore, hash,
+ *      record, save, drop the journal: a killed run repeats it harmlessly. Releases are always
+ *      applied from the base.
  *      Then deletes the managed files the manifest no longer mentions (and their "<path>.part")
  *      and forgets them: delete, forget, save, so a killed run repeats it harmlessly. Only files
  *      listed in the state are deleted, and not one whose size changed since it was recorded
@@ -55,10 +63,15 @@
 #define INSTALL_NET_ATTEMPTS 3             /* per chunk / append blob */
 
 #define INSTALL_STATE_FILE MANIFEST_STATE_DIR "/state.json"
+#define INSTALL_STATE_BAD MANIFEST_STATE_DIR "/state.json.bad" /* a corrupt state.json, kept */
 
 /* ---- ports ------------------------------------------------------------------------------ */
 
 typedef enum { INSTALL_OPEN_READ = 0, INSTALL_OPEN_WRITE } install_open_mode;
+
+/* MISSING only when the file (or a folder above it) is surely not there; anything the port
+ * cannot tell (locked, denied, I/O error) is ERROR. */
+typedef enum { INSTALL_PROBE_MISSING = 0, INSTALL_PROBE_EXISTS, INSTALL_PROBE_ERROR } install_probe_result;
 
 /* Files. Every function returns 1 on success, 0 on failure. */
 typedef struct {
@@ -76,6 +89,7 @@ typedef struct {
     int (*make_parents)(void *user, const char *path);          /* mkdir -p of path's folder */
     int (*remove)(void *user, const char *path);                /* 1 also if it did not exist */
     int (*free_space)(void *user, uint64_t *bytes);             /* 0 if unknown (check skipped) */
+    install_probe_result (*probe)(void *user, const char *path); /* does path exist? (no open) */
 } install_fs;
 
 typedef int (*install_sink)(void *user, const uint8_t *data, size_t size); /* 0 aborts */
@@ -96,7 +110,8 @@ typedef struct {
 typedef enum {
     INSTALL_PHASE_RECOVER = 0, /* undoing patch journals (done/total = journals), then deleting
                                   files no longer in the release (done/total = state entries) */
-    INSTALL_PHASE_VERIFY,      /* hashing one file; done/total = bytes of that file */
+    INSTALL_PHASE_VERIFY,      /* hashing one file (also one just restored from its journal);
+                                  done/total = bytes of that file */
     INSTALL_PHASE_DOWNLOAD,    /* done/total = bytes of the whole download plan */
     INSTALL_PHASE_PATCH,       /* applying a patch; done/total = ops */
     INSTALL_PHASE_LINE,        /* done/total = ops */
@@ -142,16 +157,19 @@ typedef struct {
     uint64_t need, free;        /* INSTALL_ERR_SPACE */
     uint64_t downloaded;        /* bytes fetched during this run */
     int fast_path;              /* 1 if nothing had to be done */
+    int state_reset;            /* 1 if state.json was corrupt: moved to INSTALL_STATE_BAD */
 } install_result;
 
 install_error install_run(const install_ctx *ctx, const release_manifest *m, install_result *result);
 
 /* 1 if state.json says `version` is installed and complete and every managed file still has
- * its recorded size (the fast path, without downloading the manifest). */
+ * its recorded size (the fast path, without downloading the manifest). 0 when state.json is
+ * missing, unreadable or corrupt (never renames it). */
 int install_is_current(const install_ctx *ctx, const char *version);
 
 /* 1 if state.json records an install that started and did not finish (cancelled, killed or
- * failed): the next install_run resumes it. */
+ * failed): the next install_run resumes it. 0 when state.json is missing, corrupt or unreadable
+ * right now: nothing known to resume is claimed; install_run then reports the real error. */
 int install_is_interrupted(const install_ctx *ctx);
 
 const char *install_error_text(install_error error);

@@ -102,6 +102,17 @@ static int p_free_space(void *user, uint64_t *bytes)
     return fs_free_space(root_dir, bytes);
 }
 
+static install_probe_result p_probe(void *user, const char *path)
+{
+    (void)user;
+    if (!native(native_a, path)) return INSTALL_PROBE_ERROR;
+    switch (fs_probe(native_a)) {
+    case FS_PROBE_MISSING: return INSTALL_PROBE_MISSING;
+    case FS_PROBE_EXISTS: return INSTALL_PROBE_EXISTS;
+    default: return INSTALL_PROBE_ERROR;
+    }
+}
+
 static install_net_result p_fetch(void *user, const uint8_t sha256[SHA256_BYTES], uint64_t blob_size, uint64_t offset,
                                   uint64_t length, install_sink sink, void *sink_user)
 {
@@ -148,7 +159,7 @@ int install_port_fetch_whole(const uint8_t sha256[SHA256_BYTES], install_sink si
 int install_port_init(const char *root, const launcher_config *cfg, install_fs *fs, install_net *net)
 {
     static const install_fs files = {0, p_open, p_read, p_write, p_seek, p_size, p_truncate, p_flush, p_close,
-                                     p_rename, p_make_parents, p_remove, p_free_space};
+                                     p_rename, p_make_parents, p_remove, p_free_space, p_probe};
     unsigned port = cfg->port;
     if (!str_copy(root_dir, sizeof root_dir, root)) return 0;
     blob_host[0] = 0;

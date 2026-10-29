@@ -13,6 +13,7 @@
 #include "app.h"
 #include "app_internal.h"
 #include "cache.h"
+#include "core/sha256.h"
 #include "core/str.h"
 #include "core/version.h"
 #include "log.h"
@@ -26,6 +27,8 @@
 #define SWAP_RETRIES 40u
 #define SWAP_RETRY_MS 250u
 #define SWAP_LOCK_MS 10000u /* another launcher holding the folder after the old one exited */
+#define LAUNCH_RETRIES 3u   /* a fresh executable may be held briefly by an antivirus scan */
+#define LAUNCH_RETRY_MS 500u
 
 static uint8_t g_exe[APP_BLOB_MAX];
 static char g_self[FS_PATH_BYTES], g_new[FS_PATH_BYTES], g_target[FS_PATH_BYTES];
@@ -44,11 +47,67 @@ static int new_path(char *out, size_t cap)
     return sb.ok;
 }
 
+/* SHA-256 of the running executable, read from disk once per run; 0 if unreadable. */
+static const uint8_t *own_sha256(void)
+{
+    static uint8_t buf[0x10000], sha[SHA256_BYTES];
+    static char name[FS_PATH_BYTES], path[FS_PATH_BYTES];
+    static int state; /* 0 not read yet, 1 read, -1 unreadable */
+    sha256_ctx ctx;
+    fs_file f;
+    size_t got = 0;
+    int ok;
+    if (state != 0) return state > 0 ? sha : 0;
+    state = -1;
+    if (fs_exe_name(name, sizeof name) && fs_join(path, sizeof path, app_dir, name) && fs_open_read(&f, path)) {
+        sha256_init(&ctx);
+        while ((ok = fs_read(&f, buf, sizeof buf, &got)) && got > 0) sha256_update(&ctx, buf, got);
+        fs_close(&f);
+        if (ok) {
+            sha256_final(&ctx, sha);
+            state = 1;
+        }
+    }
+    if (state < 0) log_line("self-update: cannot read the running executable to compare it with the update");
+    return state > 0 ? sha : 0;
+}
+
+/* The announced blob is the executable already running: a previous update was applied but the
+ * published blob is not the announced version. Updating again would loop on every start. */
+static int announced_blob_is_running(void)
+{
+    static int logged;
+    const uint8_t *own = own_sha256();
+    if (!own || !mem_eq(own, app_status.launcher.sha256, SHA256_BYTES)) return 0;
+    if (!logged) {
+        strbuf *sb = log_begin();
+        sb_add(sb, "error: self-update: the server announces launcher ");
+        sb_add(sb, app_status.launcher.version);
+        sb_add(sb, " but its blob is this executable (");
+        sb_add(sb, LAUNCHER_VERSION);
+        sb_add(sb, "); the published version or blob is wrong, not updating");
+        log_end();
+        logged = 1;
+    }
+    return 1;
+}
+
 int selfupdate_available(void)
 {
     int cmp;
     return app_status.launcher.present && version_compare_str(app_status.launcher.version, LAUNCHER_VERSION, &cmp) &&
-           cmp > 0;
+           cmp > 0 && !announced_blob_is_running();
+}
+
+/* proc_launch, retried: an antivirus may hold a just-written executable for a moment. */
+static int launch_retrying(const char *exe, const char *const *args, uint32_t argc)
+{
+    uint32_t i;
+    for (i = 0;; i++) {
+        if (proc_launch(exe, args, argc, app_dir)) return 1;
+        if (i == LAUNCH_RETRIES) return 0;
+        thread_sleep(LAUNCH_RETRY_MS);
+    }
 }
 
 static void log_trust(const char *who, trust_result r, const trust_signer *signer)
@@ -118,7 +177,7 @@ int selfupdate_start(void)
     u64_to_dec(proc_current_id(), pid);
     args[0] = "--swap";
     args[1] = pid;
-    if (!proc_launch(g_new, args, 2, app_dir)) {
+    if (!launch_retrying(g_new, args, 2)) {
         log_line("error: self-update: cannot start the new executable; keeping this version");
         fs_remove(g_new);
         return 0;

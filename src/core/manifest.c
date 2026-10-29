@@ -8,6 +8,8 @@
 typedef struct {
     release_manifest *m;
     const json_doc *doc;
+    uint32_t patches;  /* patch ops so far: each needs a journal slot */
+    uint64_t download; /* bytes the ops may download: file sizes + patch appends */
 } parser;
 
 static char lower(char c)
@@ -181,16 +183,101 @@ static manifest_error parse_line(parser *p, int op, manifest_op *out)
     return MANIFEST_OK;
 }
 
-/* A file op must be the first op on its path; nothing may follow a patch on the same path. */
-static manifest_error check_order(const release_manifest *m, uint32_t k)
+/* 1 if path ends in ".part" (the engine downloads <path> to <path>.part), without ASCII case. */
+static int is_part_name(const char *path)
 {
-    const manifest_op *op = &m->ops[k];
-    const char *path = manifest_str(m, op->path);
-    uint32_t j;
-    for (j = 0; j < k; j++) {
-        if (!manifest_path_eq(manifest_str(m, m->ops[j].path), path)) continue;
-        if (op->kind == MANIFEST_OP_FILE || m->ops[j].kind == MANIFEST_OP_PATCH) return MANIFEST_ERR_ORDER;
+    size_t n = str_len(path);
+    return n >= 5 && manifest_path_eq(path + n - 5, ".part");
+}
+
+/* Sort key of a path byte: no ASCII case, and '/' below every other byte but the end, so a
+ * folder sorts right before everything inside it ("a" < "a/b" < "a.txt" < "ab"). */
+static unsigned path_key(char c)
+{
+    unsigned char u = (unsigned char)lower(c);
+    return u == 0 ? 0 : u == '/' ? 1 : u + 2u;
+}
+
+static int path_cmp(const char *a, const char *b)
+{
+    while (*a && path_key(*a) == path_key(*b)) a++, b++;
+    return (int)path_key(*a) - (int)path_key(*b);
+}
+
+/* 1 if a is a folder of b ("a" and "a/b", without ASCII case). */
+static int is_folder_of(const char *a, const char *b)
+{
+    while (*a && lower(*a) == lower(*b)) a++, b++;
+    return *a == 0 && *b == '/';
+}
+
+/* Op order by path, then by position (so the sort is stable). */
+static int op_before(const release_manifest *m, uint32_t a, uint32_t b)
+{
+    int c = path_cmp(manifest_str(m, m->ops[a].path), manifest_str(m, m->ops[b].path));
+    return c < 0 || (c == 0 && a < b);
+}
+
+static void sift_down(release_manifest *m, uint32_t root, uint32_t n)
+{
+    uint32_t *v = m->sorted;
+    for (;;) {
+        uint32_t child = 2 * root + 1, t;
+        if (child >= n) return;
+        if (child + 1 < n && op_before(m, v[child], v[child + 1])) child++;
+        if (!op_before(m, v[root], v[child])) return;
+        t = v[root], v[root] = v[child], v[child] = t;
+        root = child;
     }
+}
+
+/* Heap sort of the op indices into m->sorted: O(n log n), no extra memory. */
+static void sort_ops(release_manifest *m)
+{
+    uint32_t n = m->op_count, i, t;
+    for (i = 0; i < n; i++) m->sorted[i] = i;
+    for (i = n / 2; i-- > 0;) sift_down(m, i, n);
+    for (i = n; i-- > 1;) {
+        t = m->sorted[0], m->sorted[0] = m->sorted[i], m->sorted[i] = t;
+        sift_down(m, 0, i);
+    }
+}
+
+/* Across all ops, compared without ASCII case: a file op must be the first op on its path,
+ * nothing may follow a patch on the same path, and no path may be a folder of another. With
+ * the ops sorted by path, equal paths are neighbours in manifest order and a folder sits right
+ * before its contents, so one pass over neighbours finds every case. *bad gets the earliest
+ * offending op. */
+static manifest_error check_paths(release_manifest *m, int *bad)
+{
+    manifest_error e = MANIFEST_OK;
+    uint32_t i, first = 0; /* first op of the current path */
+    *bad = -1;
+    sort_ops(m);
+    for (i = 1; i < m->op_count; i++) {
+        uint32_t prev = m->sorted[i - 1], cur = m->sorted[i], at;
+        manifest_error found = MANIFEST_OK;
+        const char *pp = manifest_str(m, m->ops[prev].path), *cp = manifest_str(m, m->ops[cur].path);
+        if (manifest_path_eq(pp, cp)) {
+            if (m->ops[cur].kind == MANIFEST_OP_FILE || m->ops[prev].kind == MANIFEST_OP_PATCH) found = MANIFEST_ERR_ORDER;
+            at = cur;
+        } else {
+            if (is_folder_of(pp, cp)) found = MANIFEST_ERR_TREE;
+            at = first > cur ? first : cur;
+            first = cur;
+        }
+        if (found && (*bad < 0 || at < (uint32_t)*bad)) e = found, *bad = (int)at;
+    }
+    return e;
+}
+
+/* Counts the op against the journal slots and the download total (which must not overflow). */
+static manifest_error check_totals(parser *p, const manifest_op *op)
+{
+    uint64_t add = op->kind == MANIFEST_OP_FILE ? op->target.size : op->kind == MANIFEST_OP_PATCH ? op->append.size : 0;
+    if (op->kind == MANIFEST_OP_PATCH && ++p->patches > MANIFEST_PATCHES_MAX) return MANIFEST_ERR_LIMIT;
+    if (add > UINT64_MAX - p->download) return MANIFEST_ERR_SIZE;
+    p->download += add;
     return MANIFEST_OK;
 }
 
@@ -210,14 +297,15 @@ static manifest_error parse_op(parser *p, int op, const char *self_exe)
     else return MANIFEST_ERR_OP;
     e = pool_string(p, json_get(p->doc, op, "path"), &out->path, 0);
     if (e) return e == MANIFEST_ERR_LIMIT ? e : MANIFEST_ERR_PATH;
-    if (!path_is_safe_relative(manifest_str(m, out->path)) || manifest_path_is_reserved(manifest_str(m, out->path), self_exe))
+    if (!path_is_safe_relative(manifest_str(m, out->path)) || manifest_path_is_reserved(manifest_str(m, out->path), self_exe) ||
+        is_part_name(manifest_str(m, out->path)))
         return MANIFEST_ERR_PATH;
     switch (out->kind) {
     case MANIFEST_OP_FILE: e = parse_file(p, op, out); break;
     case MANIFEST_OP_PATCH: e = parse_patch(p, op, out); break;
     default: e = parse_line(p, op, out); break;
     }
-    if (!e) e = check_order(m, m->op_count);
+    if (!e) e = check_totals(p, out);
     if (!e) m->op_count++;
     return e;
 }
@@ -226,7 +314,7 @@ manifest_error manifest_parse(release_manifest *m, const char *text, size_t len,
                               const char *self_exe, int *bad_op)
 {
     json_doc doc;
-    parser p = {m, &doc};
+    parser p = {m, &doc, 0, 0};
     uint64_t schema;
     int ops, op;
     manifest_error e;
@@ -250,7 +338,12 @@ manifest_error manifest_parse(release_manifest *m, const char *text, size_t len,
             return e;
         }
     }
-    return MANIFEST_OK;
+    e = check_paths(m, &op);
+    if (e) {
+        if (bad_op) *bad_op = op;
+        m->op_count = 0;
+    }
+    return e;
 }
 
 const char *manifest_error_text(manifest_error error)
@@ -268,6 +361,7 @@ const char *manifest_error_text(manifest_error error)
     case MANIFEST_ERR_LINE: return "line op with a line break";
     case MANIFEST_ERR_ORDER: return "ops on the same path in an order the journal cannot undo";
     case MANIFEST_ERR_LIMIT: return "manifest too large";
+    case MANIFEST_ERR_TREE: return "a path is used both as a file and as a folder";
     }
     return "unknown error";
 }

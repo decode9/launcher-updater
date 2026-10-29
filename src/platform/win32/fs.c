@@ -149,10 +149,27 @@ int fs_exe_name(char *out, size_t cap)
 
 static wchar_t wide_a[WIDE_CHARS], wide_b[WIDE_CHARS];
 
+/* After ERROR_ACCESS_DENIED: clears only the read-only attribute of path, if it was set (other
+ * attributes are kept). Returns 1 when it cleared it, so the caller retries once. */
+static int clear_readonly_after_denied(const wchar_t *path)
+{
+    DWORD attrs;
+    if (GetLastError() != ERROR_ACCESS_DENIED) return 0;
+    attrs = GetFileAttributesW(path);
+    if (attrs == INVALID_FILE_ATTRIBUTES || !(attrs & FILE_ATTRIBUTE_READONLY)) return 0;
+    return SetFileAttributesW(path, attrs & ~(DWORD)FILE_ATTRIBUTE_READONLY) != 0;
+}
+
+static int move_replace(const wchar_t *from, const wchar_t *to)
+{
+    return MoveFileExW(from, to, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != 0;
+}
+
 int fs_rename(const char *from, const char *to)
 {
     if (!widen(from, wide_a, WIDE_CHARS) || !widen(to, wide_b, WIDE_CHARS)) return 0;
-    return MoveFileExW(wide_a, wide_b, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != 0;
+    if (move_replace(wide_a, wide_b)) return 1;
+    return clear_readonly_after_denied(wide_b) && move_replace(wide_a, wide_b);
 }
 
 int fs_make_parents(const char *path)
@@ -180,7 +197,8 @@ int fs_remove(const char *path)
     if (!widen(path, wide_a, WIDE_CHARS)) return 0;
     if (DeleteFileW(wide_a)) return 1;
     e = GetLastError();
-    return e == ERROR_FILE_NOT_FOUND || e == ERROR_PATH_NOT_FOUND;
+    if (e == ERROR_FILE_NOT_FOUND || e == ERROR_PATH_NOT_FOUND) return 1;
+    return clear_readonly_after_denied(wide_a) && DeleteFileW(wide_a);
 }
 
 int fs_free_space(const char *dir, uint64_t *bytes)
@@ -189,4 +207,13 @@ int fs_free_space(const char *dir, uint64_t *bytes)
     if (!widen(dir, wide_a, WIDE_CHARS) || !GetDiskFreeSpaceExW(wide_a, &available, 0, 0) || available < 0) return 0;
     *bytes = (uint64_t)available;
     return 1;
+}
+
+fs_probe_result fs_probe(const char *path)
+{
+    DWORD e;
+    if (!widen(path, wide_a, WIDE_CHARS)) return FS_PROBE_ERROR;
+    if (GetFileAttributesW(wide_a) != INVALID_FILE_ATTRIBUTES) return FS_PROBE_EXISTS;
+    e = GetLastError();
+    return e == ERROR_FILE_NOT_FOUND || e == ERROR_PATH_NOT_FOUND ? FS_PROBE_MISSING : FS_PROBE_ERROR;
 }
