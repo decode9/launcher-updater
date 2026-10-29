@@ -126,6 +126,79 @@ TEST(dpi_points)
     CHECK(display_unscaled(399, 200) == 199);
 }
 
+static status_news news_with(const char *category)
+{
+    status_news n;
+    memset(&n, 0, sizeof n);
+    strcpy(n.category, category);
+    return n;
+}
+
+TEST(news_filter)
+{
+    status_news items[5];
+    uint8_t idx[STATUS_NEWS_MAX];
+    items[0] = news_with("updates");
+    items[1] = news_with("events");
+    items[2] = news_with("");
+    items[3] = news_with("updates");
+    items[4] = news_with("update");
+    memset(idx, 0xEE, sizeof idx);
+    CHECK_EQ_U64(display_news_filter(items, 5, "updates", idx, STATUS_NEWS_MAX), 2);
+    CHECK_EQ_U64(idx[0], 0);
+    CHECK_EQ_U64(idx[1], 3);
+    CHECK_EQ_U64(idx[2], 0xEE);                                               /* nothing more written */
+    CHECK_EQ_U64(display_news_filter(items, 5, "events", idx, STATUS_NEWS_MAX), 1);
+    CHECK_EQ_U64(idx[0], 1);
+    CHECK_EQ_U64(display_news_filter(items, 5, "", idx, STATUS_NEWS_MAX), 5); /* all, in order */
+    CHECK(idx[0] == 0 && idx[1] == 1 && idx[2] == 2 && idx[3] == 3 && idx[4] == 4);
+    CHECK_EQ_U64(display_news_filter(items, 5, 0, idx, STATUS_NEWS_MAX), 5);
+    CHECK_EQ_U64(display_news_filter(items, 5, "Updates", idx, STATUS_NEWS_MAX), 0); /* exact */
+    CHECK_EQ_U64(display_news_filter(items, 5, "none", idx, STATUS_NEWS_MAX), 0);
+    CHECK_EQ_U64(display_news_filter(items, 0, 0, idx, STATUS_NEWS_MAX), 0);
+    memset(idx, 0xEE, sizeof idx);
+    CHECK_EQ_U64(display_news_filter(items, 5, 0, idx, 2), 2);               /* cap respected */
+    CHECK(idx[0] == 0 && idx[1] == 1 && idx[2] == 0xEE);
+    CHECK_EQ_U64(display_news_filter(items, 5, 0, 0, 0), 0);
+}
+
+TEST(news_date)
+{
+    char out[32];
+    display_news_date("2026-10-28", "{mm}-{dd}", out, sizeof out);
+    CHECK_STR(out, "10-28");
+    display_news_date("2026-10-28", "{dd}.{mm}.{yyyy}", out, sizeof out);
+    CHECK_STR(out, "28.10.2026");
+    display_news_date("2026-01-05", "[{yyyy}/{mm}/{dd}] {x} {", out, sizeof out);
+    CHECK_STR(out, "[2026/01/05] {x} {");                                     /* unknown fields kept */
+    display_news_date("2026-10-28", "", out, sizeof out);
+    CHECK_STR(out, "");
+    display_news_date("2026-10-28", 0, out, sizeof out);
+    CHECK_STR(out, "2026-10-28");
+    display_news_date("", "{mm}-{dd}", out, sizeof out);
+    CHECK_STR(out, "");                                                        /* no date */
+    display_news_date(0, "{mm}-{dd}", out, sizeof out);
+    CHECK_STR(out, "");
+    display_news_date("2026-02-30", "{mm}-{dd}", out, sizeof out);
+    CHECK_STR(out, "");                                                        /* invalid date */
+    display_news_date("2026-10-28", "{dd}.{mm}.{yyyy}", out, 6);
+    CHECK_STR(out, "28.10");                                                   /* cut, still terminated */
+}
+
+TEST(menu_entries)
+{
+    CHECK(display_repair_enabled(THEME_LS_READY));
+    CHECK(display_repair_enabled(THEME_LS_ERROR));
+    CHECK(!display_repair_enabled(THEME_LS_CHECKING));
+    CHECK(!display_repair_enabled(THEME_LS_LOCKED));
+    CHECK(!display_repair_enabled(THEME_LS_INSTALLING));
+    CHECK(display_settings_enabled(THEME_LS_READY));
+    CHECK(display_settings_enabled(THEME_LS_LOCKED));
+    CHECK(display_settings_enabled(THEME_LS_ERROR));
+    CHECK(!display_settings_enabled(THEME_LS_CHECKING));
+    CHECK(!display_settings_enabled(THEME_LS_INSTALLING));
+}
+
 int main(void)
 {
     RUN(sizes);
@@ -136,5 +209,8 @@ int main(void)
     RUN(dpi_scale);
     RUN(dpi_fit);
     RUN(dpi_points);
+    RUN(news_filter);
+    RUN(news_date);
+    RUN(menu_entries);
     return test_report();
 }

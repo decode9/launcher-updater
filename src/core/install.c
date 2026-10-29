@@ -610,7 +610,7 @@ static install_error apply_patch(const release_manifest *m, const manifest_op *o
     install_error e = INSTALL_OK;
     /* 1. The file must be the base; nothing is touched otherwise. */
     if (!path_size(path, &size) || size != op->base.size) return INSTALL_ERR_BASE;
-    if (!state_matches(&state, path, op->base.sha256, op->base.size)) {
+    if (cx->force_verify || !state_matches(&state, path, op->base.sha256, op->base.size)) {
         if (!file_is(path, &op->base, &e)) return e ? e : INSTALL_ERR_BASE;
         if (!state_set(&state, path, op->base.sha256, op->base.size)) return INSTALL_ERR_STATE;
     }
@@ -697,7 +697,7 @@ static install_error plan(const release_manifest *m, uint64_t *need)
         present[k] = 0;
         if (op->kind == MANIFEST_OP_FILE) {
             if (path_size(path, &size) && size == op->target.size) {
-                if (state_matches(&state, path, op->target.sha256, size)) {
+                if (!cx->force_verify && state_matches(&state, path, op->target.sha256, size)) {
                     present[k] = 1;
                 } else if (file_is(path, &op->target, &e)) {
                     present[k] = 1;
@@ -796,7 +796,7 @@ static install_error run(const release_manifest *m)
     uint32_t k;
     install_error e = load_state_for_run();
     if (e) return e;
-    if (is_current(m->version)) {
+    if (!cx->force_verify && is_current(m->version)) {
         res->fast_path = 1;
         return INSTALL_OK;
     }

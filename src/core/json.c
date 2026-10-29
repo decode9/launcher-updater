@@ -305,6 +305,22 @@ int json_u64(const json_doc *d, int i, uint64_t *out)
     return dec_to_u64(d->text + t->start, t->end - t->start, out);
 }
 
+int json_i64(const json_doc *d, int i, int64_t *out)
+{
+    const json_token *t = token(d, i);
+    const char *s;
+    uint32_t n;
+    uint64_t v;
+    int neg;
+    if (!t || t->type != JSON_NUMBER) return 0;
+    s = d->text + t->start;
+    n = t->end - t->start;
+    neg = n > 0 && s[0] == '-';
+    if (!dec_to_u64(s + neg, n - (uint32_t)neg, &v) || v > (uint64_t)INT64_MAX) return 0;
+    *out = neg ? -(int64_t)v : (int64_t)v;
+    return 1;
+}
+
 int json_bool(const json_doc *d, int i, int *out)
 {
     int k = json_kind(d, i);

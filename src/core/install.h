@@ -11,7 +11,7 @@
  *      written at all (retried on the next run). Readable but corrupt -> renamed to
  *      .launcher/state.json.bad (result.state_reset = 1) and the run goes on from an empty state.
  *   1. Fast path: state.json says this release is complete and every managed file still has
- *      its size on disk -> nothing to do.
+ *      its size on disk -> nothing to do. Skipped with ctx->force_verify (repair).
  *   2. Marks the install as under way, then undoes every patch journal listed in the state:
  *      the half-done patch of an interrupted install and the applied patches of the previous
  *      release alike (truncate to the base size, restore old bytes in reverse order), then
@@ -25,7 +25,8 @@
  *      listed in the state are deleted, and not one whose size changed since it was recorded
  *      (someone else wrote it): that one is only forgotten. The state never outgrows a manifest.
  *   3. Plans: decides which `file` ops are already present (state entry with the same
- *      sha256 + size and the same size on disk, or else one full hash) and how many bytes are
+ *      sha256 + size and the same size on disk, or else one full hash; always the full hash
+ *      with ctx->force_verify) and how many bytes are
  *      missing; fails with INSTALL_ERR_SPACE before downloading if the disk is too full.
  *   4. Applies the ops in manifest order:
  *      file  -> downloads into "<path>.part" chunk by chunk, verifying each chunk's SHA-256
@@ -134,6 +135,10 @@ typedef struct {
     void *progress_user;
     volatile const int *cancel;   /* optional; non-zero stops the install */
     const char *self_exe;         /* file name of the launcher (never touched) */
+    int force_verify;             /* repair: no fast path (step 1) and no "recorded sha256 + size
+                                     = present" shortcut (step 3, patch bases): every file is
+                                     hashed, and one that does not match is downloaded again.
+                                     Last field, so positional initialisers leave it 0. */
 } install_ctx;
 
 /* ---- result ----------------------------------------------------------------------------- */

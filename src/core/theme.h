@@ -5,7 +5,7 @@
  * The executable has no built-in design: a theme describes the window, colour tokens, fonts,
  * translated strings and a list of positioned elements. theme_parse turns the JSON into a
  * self-contained model (all text is copied into the model's own pool, so the JSON text and the
- * token array can be dropped afterwards). No allocation: the caller owns the theme_model (~47
+ * token array can be dropped afterwards). No allocation: the caller owns the theme_model (~60
  * KiB, keep it static) and the JSON token array.
  *
  * Open for extension, tolerant on input:
@@ -39,7 +39,7 @@
 #define THEME_MAX_LANGS 8
 #define THEME_MAX_STRINGS 128 /* per language */
 #define THEME_MAX_BLOBS 32    /* distinct images + font files */
-#define THEME_NAME_BYTES 32   /* token, font and language names, including the NUL */
+#define THEME_NAME_BYTES 32   /* token, font, language and category names, including the NUL */
 #define THEME_POOL_BYTES 32768 /* all decoded text: font families, strings, keys, URLs */
 #define THEME_MAX_SIDE 4096   /* window width/height bound */
 
@@ -90,12 +90,15 @@ typedef enum {
 } theme_launcher_state;
 #define THEME_LS_ALL ((1u << THEME_LS_COUNT) - 1u)
 
-/* Interaction states of an element's style. hover/pressed/disabled inherit from normal. */
+/* Interaction states of an element's style. Every state other than normal inherits from normal.
+ * New states go at the end so existing indices never move. selected: a filter button whose
+ * category is the active one. */
 typedef enum {
     THEME_ST_NORMAL = 0,
     THEME_ST_HOVER,
     THEME_ST_PRESSED,
     THEME_ST_DISABLED,
+    THEME_ST_SELECTED,
     THEME_ST_COUNT
 } theme_state;
 
@@ -107,6 +110,7 @@ typedef enum {
     THEME_EL_COUNTDOWN,
     THEME_EL_STATUS,
     THEME_EL_BUTTON,
+    THEME_EL_NEWS_LIST,
     THEME_EL_TYPE_COUNT
 } theme_element_type;
 
@@ -116,7 +120,10 @@ typedef enum {
     THEME_ACT_PLAY = 0,
     THEME_ACT_EXIT,
     THEME_ACT_MINIMIZE,
-    THEME_ACT_OPEN_URL
+    THEME_ACT_OPEN_URL,
+    THEME_ACT_FILTER,   /* show only the news of e->category ("" = all news) */
+    THEME_ACT_LANGUAGE, /* language menu */
+    THEME_ACT_OPTIONS   /* options menu (repair, open folder, game settings) */
 } theme_action;
 
 typedef struct {
@@ -136,16 +143,31 @@ typedef struct {
     int16_t file;    /* blob index of the font file, or -1 (system font by family) */
 } theme_font;
 
+#define THEME_GRADIENT_MAX_COLORS 4
+#define THEME_GRADIENT_ANGLE 90 /* default: top to bottom */
+
+/* Linear gradient: count 0 = none, otherwise 2..THEME_GRADIENT_MAX_COLORS evenly spaced
+ * colours. angle in degrees 0..359, measured like CSS minus 90: 0 = left to right, 90 = top to
+ * bottom. */
+typedef struct {
+    theme_color colors[THEME_GRADIENT_MAX_COLORS];
+    uint16_t angle;
+    uint8_t count;
+} theme_gradient;
+
 /* A fully resolved style for one interaction state: no inheritance left to do. */
 typedef struct {
     theme_color fill;    /* background; THEME_COLOR_NONE = none */
     theme_color color;   /* text */
     theme_color border;  /* THEME_COLOR_NONE = none */
     theme_color track;   /* progress: the empty part */
+    theme_gradient gradient; /* when count > 0 it is drawn instead of fill */
     uint16_t border_width;
     uint16_t radius;
     int16_t image;       /* blob index, or -1 */
     int16_t font;        /* font index, or -1 = built-in default */
+    int8_t brightness;   /* -100..100, default 0: applied to images this element draws */
+    uint8_t opacity;     /* 0..100, default 100: applied to images this element draws */
 } theme_style;
 
 typedef struct {
@@ -158,8 +180,18 @@ typedef struct {
     theme_sref url;        /* button open_url: https:// URL */
     int16_t image;         /* image element: blob index, or -1 */
     uint16_t interval;     /* news: seconds per item, default 8 */
+    theme_sref category;   /* button filter: news category, 0 = "" = all news */
+    /* news_list: one row per news item; the tag and date columns are omitted at width 0. */
+    uint16_t row_height;   /* 8..512, default 40 */
+    uint16_t tag_width;    /* 0..1024, default 0 */
+    uint16_t date_width;   /* 0..1024, default 0 */
+    uint16_t gap;          /* 0..256, default 12: between columns */
+    theme_sref date_format; /* string key or literal, default THEME_DATE_FORMAT */
     theme_style style[THEME_ST_COUNT];
+    theme_style tag_style; /* news_list: the tag column, inherits from style[NORMAL] */
 } theme_element;
+
+#define THEME_DATE_FORMAT "{mm}-{dd}" /* news_list date_format default */
 
 typedef struct {
     char name[THEME_NAME_BYTES];
@@ -187,6 +219,7 @@ typedef struct {
     uint16_t width, height; /* default 960 x 600 */
     uint16_t radius;
     uint8_t draggable;      /* default 1 */
+    uint8_t transparent;    /* default 0: 1 = per-pixel alpha window, no rounded region */
     theme_color background; /* window.background.color */
     int16_t background_image; /* blob index, or -1 */
     int16_t default_font;     /* the font named "body", or -1 */

@@ -10,6 +10,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "status.h"
 #include "theme.h"
 
 /* "0 B", "999 B", "1.0 KB", "12.5 MB", "3.2 GB", "1.0 TB" (1024-based, one decimal,
@@ -33,6 +34,27 @@ void display_countdown_split(uint32_t seconds, display_countdown *out);
 /* Whether a button with this action reacts in launcher state ls: play only in ready and while
  * play_enabled (0 when there is nothing to play), the others always. */
 int display_action_enabled(theme_action action, theme_launcher_state ls, int play_enabled);
+
+/* Options menu entries: "Verify and repair files" only on the ready or error screen (as
+ * flow_on_repair accepts it); "Game settings" whenever no install or check is running (ready,
+ * locked, error), since the settings program belongs to the installed files. */
+int display_repair_enabled(theme_launcher_state ls);
+int display_settings_enabled(theme_launcher_state ls);
+
+/* ---- news ---------------------------------------------------------------- */
+
+/* Writes, in order, the indices of the items whose category equals category exactly (0 or ""
+ * selects every item, also those without a category) into out_index, at most cap of them.
+ * Returns how many it wrote. Indices fit in a byte because count <= STATUS_NEWS_MAX. */
+uint32_t display_news_filter(const status_news *items, uint32_t count, const char *category, uint8_t *out_index,
+                             uint32_t cap);
+
+/* Expands a news date ("YYYY-MM-DD", see status_news.date) through a template: {yyyy}, {mm}
+ * and {dd} become the year and the two-digit month and day ("{dd}.{mm}" -> "28.10"); any other
+ * text, including unknown {fields}, is copied as is. An empty or invalid date gives "", a null
+ * template gives the date unchanged. Always NUL-terminated when cap > 0; cut before the first piece that does not fit.
+ * (A small expander of its own: theme_format's variables are not touched for this.) */
+void display_news_date(const char *date, const char *tmpl, char *out, size_t cap);
 
 /* ---- DPI scaling: themes are in logical pixels (96 DPI); the window shows them at a scale in
  * percent (100 = 1:1, 150 at 144 DPI...). */

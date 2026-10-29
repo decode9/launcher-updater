@@ -2,6 +2,16 @@
   "opens_at": "2030-01-01T12:00:00Z",
   "news": [
     {"title": {"en": "Example Game beta opens soon", "es": "La beta de Example Game abre pronto"},
-     "link": "https://example.com/news/beta"}
+     "link": "https://example.com/news/beta", "category": "events", "date": "2026-10-28"},
+    {"title": {"en": "Update 1.2: new maps and fixes", "es": "Actualización 1.2: mapas nuevos y correcciones"},
+     "link": "https://example.com/news/update-1-2", "category": "updates", "date": "2026-10-24"},
+    {"title": {"en": "Scheduled maintenance on Thursday", "es": "Mantenimiento programado el jueves"},
+     "link": "https://example.com/news/maintenance", "category": "info", "date": "2026-10-21"},
+    {"title": {"en": "Weekend event: double rewards", "es": "Evento de fin de semana: recompensas dobles"},
+     "link": "https://example.com/news/weekend-event", "category": "events", "date": "2026-10-17"},
+    {"title": {"en": "Update 1.1: performance improvements", "es": "Actualización 1.1: mejoras de rendimiento"},
+     "link": "https://example.com/news/update-1-1", "category": "updates", "date": "2026-10-10"},
+    {"title": {"en": "Welcome to the community", "es": "Bienvenidos a la comunidad"},
+     "link": "https://example.com/news/welcome", "category": "info", "date": "2026-10-01"}
   ]
 }

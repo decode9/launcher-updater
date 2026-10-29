@@ -10,9 +10,11 @@
  *     loop: apply step.view if step.show, then
  *       FLOW_DO_FETCH:   fetch; if a click arrived meanwhile flow_on_play(&f);
  *                        step = flow_on_status(&f, &facts, random)
- *       FLOW_DO_WAIT:    wait step.wait_ms; on a click step = flow_on_play(&f)
- *                        (FLOW_DO_NONE: keep waiting), on timeout step = flow_on_timeout(&f)
- *       FLOW_DO_INSTALL: step = flow_on_install(&f, result)
+ *       FLOW_DO_WAIT:    wait step.wait_ms; on a click step = flow_on_play(&f), on a repair
+ *                        request step = flow_on_repair(&f) (FLOW_DO_NONE: keep waiting),
+ *                        on timeout step = flow_on_timeout(&f)
+ *       FLOW_DO_INSTALL: install (hashing every file when step.repair);
+ *                        step = flow_on_install(&f, result)
  *       FLOW_DO_LAUNCH:  step = flow_on_launch(&f, started)
  *       FLOW_DO_CLOSE:   the game runs: close the launcher
  *
@@ -20,6 +22,13 @@
  * while a status is being fetched is kept and served by that fetch; open without a published
  * release shows status.no_release with Play disabled; a locked server whose countdown is due
  * is polled with growing, jittered delays (5, 10, 20, 40, 60 s + 0-25 %).
+ *
+ * Repair (flow_on_repair): only from the ready or error screen. Like Play it fetches a fresh
+ * status first; when that status is open and names a release, it installs with step.repair set
+ * (every file hashed, whatever does not match downloaded again) and never launches: success
+ * fetches the status again, which puts the usual screen back; failure shows the error screen.
+ * A status that cannot install (unreachable, locked, no release) drops the repair and is shown
+ * as usual. A Play click pending on that same fetch is dropped in favour of the repair.
  */
 #ifndef LAUNCHER_CORE_FLOW_H
 #define LAUNCHER_CORE_FLOW_H
@@ -72,6 +81,7 @@ typedef struct {
 typedef struct {
     flow_action action;
     uint32_t wait_ms; /* FLOW_DO_WAIT */
+    int repair;       /* FLOW_DO_INSTALL: a repair (full verification, no launch afterwards) */
     int show;         /* view must be applied before doing action */
     flow_view view;
 } flow_step;
@@ -89,6 +99,8 @@ typedef enum {
 typedef struct {
     flow_phase phase;
     int play_pending;  /* Play was pressed: the next status decides install/launch */
+    int repair_pending; /* a repair was asked for: the next status decides whether it runs */
+    int repairing;     /* the install under way is a repair */
     uint32_t due_tries; /* consecutive due polls while locked */
     uint32_t wait_ms;  /* poll delay of the last status */
     flow_view view;    /* on screen */
@@ -104,9 +116,15 @@ flow_step flow_on_status(flow_state *f, const flow_facts *facts, uint32_t random
  * waiting with Play enabled it asks for a fresh status; otherwise it is ignored. */
 flow_step flow_on_play(flow_state *f);
 
+/* Options -> repair. While waiting on the ready or error screen it asks for a fresh status
+ * (screen checking) that serves the repair; anywhere else FLOW_DO_NONE (ignored). */
+flow_step flow_on_repair(flow_state *f);
+
 /* The wait ended without a click: poll again (the screen stays). */
 flow_step flow_on_timeout(flow_state *f);
 
+/* After Play: success launches, failure shows the ready screen with the reason. After a repair:
+ * success fetches the status again (no launch), failure shows the error screen. */
 flow_step flow_on_install(flow_state *f, flow_install_result result);
 
 /* started: the game process was created. */

@@ -79,6 +79,54 @@ int display_action_enabled(theme_action action, theme_launcher_state ls, int pla
     return action != THEME_ACT_PLAY || (ls == THEME_LS_READY && play_enabled);
 }
 
+int display_repair_enabled(theme_launcher_state ls)
+{
+    return ls == THEME_LS_READY || ls == THEME_LS_ERROR;
+}
+
+int display_settings_enabled(theme_launcher_state ls)
+{
+    return ls == THEME_LS_READY || ls == THEME_LS_LOCKED || ls == THEME_LS_ERROR;
+}
+
+uint32_t display_news_filter(const status_news *items, uint32_t count, const char *category, uint8_t *out_index,
+                             uint32_t cap)
+{
+    uint32_t i, n = 0;
+    int all = !category || !category[0];
+    if (count > STATUS_NEWS_MAX) count = STATUS_NEWS_MAX;
+    for (i = 0; i < count && n < cap; i++)
+        if (all || str_eq(items[i].category, category)) out_index[n++] = (uint8_t)i;
+    return n;
+}
+
+void display_news_date(const char *date, const char *tmpl, char *out, size_t cap)
+{
+    /* Each field is a slice of the date: {yyyy} = [0,4), {mm} = [5,7), {dd} = [8,10). */
+    static const struct {
+        const char *name;
+        size_t at, len;
+    } fields[] = {{"{yyyy}", 0, 4}, {"{mm}", 5, 2}, {"{dd}", 8, 2}};
+    strbuf sb;
+    size_t i;
+    sb_init(&sb, out, cap);
+    if (!date || !status_date_is_valid(date, str_len(date))) return;
+    if (!tmpl) {
+        sb_add(&sb, date);
+        return;
+    }
+    while (*tmpl) {
+        for (i = 0; i < sizeof fields / sizeof fields[0]; i++)
+            if (str_starts_with(tmpl, fields[i].name)) break;
+        if (i < sizeof fields / sizeof fields[0]) {
+            sb_add_n(&sb, date + fields[i].at, fields[i].len);
+            tmpl += str_len(fields[i].name);
+        } else {
+            sb_add_char(&sb, *tmpl++);
+        }
+    }
+}
+
 uint32_t display_scale_from_dpi(uint32_t dpi)
 {
     uint32_t pct;

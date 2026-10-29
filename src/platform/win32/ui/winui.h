@@ -17,6 +17,7 @@ typedef void *HRGN;
 typedef void *HCURSOR;
 typedef void *HICON;
 typedef void *HINSTANCE;
+typedef void *HMENU;
 typedef unsigned int UINT;
 typedef uintptr_t WPARAM;
 typedef intptr_t LPARAM;
@@ -61,6 +62,28 @@ typedef struct {
     BOOL fRestore, fIncUpdate;
     unsigned char rgbReserved[32];
 } PAINTSTRUCT;
+
+typedef struct {
+    LONG cx, cy;
+} SIZE;
+
+typedef struct {
+    unsigned char BlendOp, BlendFlags, SourceConstantAlpha, AlphaFormat;
+} BLENDFUNCTION;
+
+typedef struct {
+    DWORD biSize;
+    LONG biWidth, biHeight;
+    unsigned short biPlanes, biBitCount;
+    DWORD biCompression, biSizeImage;
+    LONG biXPelsPerMeter, biYPelsPerMeter;
+    DWORD biClrUsed, biClrImportant;
+} BITMAPINFOHEADER;
+
+typedef struct {
+    BITMAPINFOHEADER bmiHeader;
+    DWORD bmiColors[1];
+} BITMAPINFO;
 
 typedef struct {
     DWORD cbSize, dwFlags;
@@ -115,7 +138,23 @@ struct IStream {
 #define WS_SYSMENU 0x00080000UL
 #define WS_MINIMIZEBOX 0x00020000UL
 #define WS_EX_APPWINDOW 0x00040000UL
+#define WS_EX_LAYERED 0x00080000UL
+#define GWL_EXSTYLE (-20)
+#define ULW_ALPHA 0x00000002
+#define AC_SRC_OVER 0x00
+#define AC_SRC_ALPHA 0x01
+#define BI_RGB 0
+#define DIB_RGB_COLORS 0
 #define SRCCOPY 0x00CC0020UL
+#define MF_STRING 0x0000
+#define MF_GRAYED 0x0001
+#define MF_CHECKED 0x0008
+#define MF_SEPARATOR 0x0800
+#define TPM_LEFTALIGN 0x0000
+#define TPM_TOPALIGN 0x0000
+#define TPM_NONOTIFY 0x0080
+#define TPM_RETURNCMD 0x0100
+#define WM_NULL 0x0000
 #define ICON_SMALL 0
 #define ICON_BIG 1
 
@@ -154,6 +193,14 @@ IMPORT BOOL WINAPI SystemParametersInfoW(UINT, UINT, void *, UINT);
 IMPORT BOOL WINAPI SetForegroundWindow(HWND);
 IMPORT HWND WINAPI FindWindowW(const wchar_t *, const wchar_t *);
 IMPORT BOOL WINAPI IsIconic(HWND);
+IMPORT BOOL WINAPI UpdateLayeredWindow(HWND, HDC, POINT *, SIZE *, HDC, POINT *, DWORD, BLENDFUNCTION *, DWORD);
+IMPORT LONG WINAPI GetWindowLongW(HWND, int);
+IMPORT LONG WINAPI SetWindowLongW(HWND, int, LONG);
+IMPORT BOOL WINAPI ClientToScreen(HWND, POINT *);
+IMPORT HMENU WINAPI CreatePopupMenu(void);
+IMPORT BOOL WINAPI AppendMenuW(HMENU, UINT, uintptr_t, const wchar_t *);
+IMPORT BOOL WINAPI TrackPopupMenu(HMENU, UINT, int, int, int, HWND, const RECT *);
+IMPORT BOOL WINAPI DestroyMenu(HMENU);
 
 IMPORT HDC WINAPI CreateCompatibleDC(HDC);
 IMPORT HBITMAP WINAPI CreateCompatibleBitmap(HDC, int, int);
@@ -163,6 +210,7 @@ IMPORT BOOL WINAPI DeleteDC(HDC);
 IMPORT BOOL WINAPI BitBlt(HDC, int, int, int, int, HDC, int, int, DWORD);
 IMPORT HRGN WINAPI CreateRoundRectRgn(int, int, int, int, int, int);
 IMPORT int WINAPI GetDeviceCaps(HDC, int);
+IMPORT HBITMAP WINAPI CreateDIBSection(HDC, const BITMAPINFO *, UINT, void **, HANDLE, DWORD);
 
 IMPORT HINSTANCE WINAPI ShellExecuteW(HWND, const wchar_t *, const wchar_t *, const wchar_t *, const wchar_t *,
                                       int);

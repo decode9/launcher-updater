@@ -68,16 +68,17 @@ TEST(bad_fields)
     CHECK(config_parse(&cfg, "{", 1, tokens, 128) == CONFIG_ERR_JSON);
 }
 
+static const char *const good[] = {"\"Game.exe\"", "\"bin/Game.exe\"", "\"a b/c.d.exe\"", "\"..a/b..c\"",
+                                   "\"com10.txt\"", "\"\xc3\xb1/x\""};
+static const char *const bad[] = {
+    "\"/Game.exe\"", "\"C:/Game.exe\"", "\"C:Game.exe\"", "\"bin\\\\Game.exe\"", "\"\\\\\\\\host\\\\x\"",
+    "\"../Game.exe\"", "\"bin/../../Game.exe\"", "\"bin/..\"", "\"./Game.exe\"", "\"bin//Game.exe\"",
+    "\"bin/\"", "\"\"", "\"Game.exe.\"", "\"Game.exe \"", "\"CON\"", "\"nul.txt\"", "\"bin/COM1.exe\"",
+    "\"lpt9\"", "\"a\\u0001b\"", "\"a*b\"", "\"a?b\"", "\"a|b\"", "\"a<b\"", "\"a\\\"b\"", "null", "5",
+};
+
 TEST(launch_paths)
 {
-    static const char *const good[] = {"\"Game.exe\"", "\"bin/Game.exe\"", "\"a b/c.d.exe\"", "\"..a/b..c\"",
-                                       "\"com10.txt\"", "\"\xc3\xb1/x\""};
-    static const char *const bad[] = {
-        "\"/Game.exe\"", "\"C:/Game.exe\"", "\"C:Game.exe\"", "\"bin\\\\Game.exe\"", "\"\\\\\\\\host\\\\x\"",
-        "\"../Game.exe\"", "\"bin/../../Game.exe\"", "\"bin/..\"", "\"./Game.exe\"", "\"bin//Game.exe\"",
-        "\"bin/\"", "\"\"", "\"Game.exe.\"", "\"Game.exe \"", "\"CON\"", "\"nul.txt\"", "\"bin/COM1.exe\"",
-        "\"lpt9\"", "\"a\\u0001b\"", "\"a*b\"", "\"a?b\"", "\"a|b\"", "\"a<b\"", "\"a\\\"b\"", "null", "5",
-    };
     size_t i;
     for (i = 0; i < sizeof good / sizeof good[0]; i++) {
         config_error e = parse_exe(good[i]);
@@ -89,6 +90,59 @@ TEST(launch_paths)
         if (e != CONFIG_ERR_LAUNCH) fprintf(stderr, "accepted bad path %s\n", bad[i]);
         CHECK(e == CONFIG_ERR_LAUNCH);
     }
+}
+
+static config_error parse_settings(const char *settings_json)
+{
+    snprintf(text, sizeof text,
+             "{\"server\": \"a.b\", \"port\": 1, \"fingerprint\": \"" PIN "\", "
+             "\"launch\": {\"exe\": \"Game.exe\", \"args\": [\"x\"]}, \"settings\": %s}",
+             settings_json);
+    return config_parse(&cfg, text, strlen(text), tokens, 128);
+}
+
+TEST(settings)
+{
+    char json[512];
+    size_t i;
+    /* absent / null: none */
+    CHECK(parse_exe("\"Game.exe\"") == CONFIG_OK);
+    CHECK(!cfg.has_settings && cfg.settings_argc == 0 && !cfg.settings_exe[0]);
+    CHECK(parse_settings("null") == CONFIG_OK);
+    CHECK(!cfg.has_settings);
+    /* valid, with and without args; launch is kept apart */
+    CHECK(parse_settings("{\"exe\": \"tools/Setup.exe\", \"args\": [\"-config\", \"{server}\"]}") == CONFIG_OK);
+    CHECK(cfg.has_settings);
+    CHECK_STR(cfg.settings_exe, "tools/Setup.exe");
+    CHECK_EQ_U64(cfg.settings_argc, 2);
+    CHECK_STR(cfg.settings_args[0], "-config");
+    CHECK_STR(cfg.launch_exe, "Game.exe");
+    CHECK_EQ_U64(cfg.launch_argc, 1);
+    CHECK(parse_settings("{\"exe\": \"Setup.exe\", \"args\": null}") == CONFIG_OK);
+    CHECK(cfg.has_settings && cfg.settings_argc == 0);
+    /* a second parse forgets the first one's settings */
+    CHECK(parse_exe("\"Game.exe\"") == CONFIG_OK);
+    CHECK(!cfg.has_settings);
+    /* same validation as launch */
+    CHECK(parse_settings("5") == CONFIG_ERR_SETTINGS);
+    CHECK(parse_settings("{}") == CONFIG_ERR_SETTINGS);
+    CHECK(parse_settings("{\"exe\": \"S.exe\", \"args\": [1]}") == CONFIG_ERR_SETTINGS);
+    CHECK(parse_settings("{\"exe\": \"S.exe\", \"args\": \"x\"}") == CONFIG_ERR_SETTINGS);
+    CHECK(parse_settings("{\"exe\": \"S.exe\", \"args\": [\"1\",\"2\",\"3\",\"4\",\"5\",\"6\",\"7\",\"8\","
+                         "\"9\",\"10\",\"11\",\"12\",\"13\",\"14\",\"15\",\"16\",\"17\"]}") == CONFIG_ERR_SETTINGS);
+    CHECK(!cfg.has_settings);
+    for (i = 0; i < sizeof good / sizeof good[0]; i++) {
+        snprintf(json, sizeof json, "{\"exe\": %s}", good[i]);
+        CHECK(parse_settings(json) == CONFIG_OK);
+    }
+    for (i = 0; i < sizeof bad / sizeof bad[0]; i++) {
+        config_error e;
+        snprintf(json, sizeof json, "{\"exe\": %s}", bad[i]);
+        e = parse_settings(json);
+        if (e != CONFIG_ERR_SETTINGS) fprintf(stderr, "settings accepted bad path %s\n", bad[i]);
+        CHECK(e == CONFIG_ERR_SETTINGS);
+    }
+    CHECK(strcmp(config_error_text(CONFIG_ERR_SETTINGS), "unknown error") != 0);
 }
 
 TEST(path_length)
@@ -126,6 +180,7 @@ int main(void)
     RUN(optional_fields);
     RUN(bad_fields);
     RUN(launch_paths);
+    RUN(settings);
     RUN(path_length);
     return test_report();
 }

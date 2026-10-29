@@ -8,4 +8,9 @@
  * launcher states until the window is closed. Returns the process exit code. */
 int app_preview(void);
 
+/* The preview's language menu, UI thread only: shows the theme texts and title in lang
+ * (core/prefs.h prefs_lang_valid) from now on. Nothing is saved: the preview has no launcher
+ * folder. Returns 0, changing nothing, if lang is not valid. */
+int preview_set_language(const char *lang);
+
 #endif

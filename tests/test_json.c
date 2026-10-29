@@ -60,6 +60,18 @@ TEST(numbers)
     CHECK(!json_u64(&d, json_at(&d, 0, 5), &n)); /* exponent */
     CHECK(json_u64(&d, json_at(&d, 0, 6), &n) && n == 0);
     CHECK(json_kind(&d, json_at(&d, 0, 4)) == JSON_NUMBER);
+
+    {
+        int64_t v;
+        CHECK(parse(&d, "[-40, 100, -0, 9223372036854775807, 9223372036854775808, -1.5, \"-1\"]") == JSON_OK);
+        CHECK(json_i64(&d, json_at(&d, 0, 0), &v) && v == -40);
+        CHECK(json_i64(&d, json_at(&d, 0, 1), &v) && v == 100);
+        CHECK(json_i64(&d, json_at(&d, 0, 2), &v) && v == 0);
+        CHECK(json_i64(&d, json_at(&d, 0, 3), &v) && v == INT64_MAX);
+        CHECK(!json_i64(&d, json_at(&d, 0, 4), &v)); /* overflow */
+        CHECK(!json_i64(&d, json_at(&d, 0, 5), &v)); /* fraction */
+        CHECK(!json_i64(&d, json_at(&d, 0, 6), &v)); /* string */
+    }
 }
 
 TEST(escapes)

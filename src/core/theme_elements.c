@@ -34,6 +34,43 @@ static int parse_news(theme_ctx *c, int object, theme_element *e)
     return 1;
 }
 
+/* news_list: the news items as rows (title, optional tag and date columns). Every field has a
+ * default; tag_style overlays the element's normal style. */
+static int parse_news_list(theme_ctx *c, int object, theme_element *e)
+{
+    uint32_t v;
+    int format = json_get(c->doc, object, "date_format");
+    v = 40;
+    theme_ctx_uint(c, json_get(c->doc, object, "row_height"), 8, 512, &v);
+    e->row_height = (uint16_t)v;
+    v = 0;
+    theme_ctx_uint(c, json_get(c->doc, object, "tag_width"), 0, 1024, &v);
+    e->tag_width = (uint16_t)v;
+    v = 0;
+    theme_ctx_uint(c, json_get(c->doc, object, "date_width"), 0, 1024, &v);
+    e->date_width = (uint16_t)v;
+    v = 12;
+    theme_ctx_uint(c, json_get(c->doc, object, "gap"), 0, 256, &v);
+    e->gap = (uint16_t)v;
+    if (format >= 0 && json_kind(c->doc, format) != JSON_STRING) c->theme->warnings |= THEME_WARN_BAD_VALUE;
+    e->date_format = theme_ctx_string(c, format);
+    if (!e->date_format) e->date_format = theme_ctx_literal(c, THEME_DATE_FORMAT);
+    e->tag_style = e->style[THEME_ST_NORMAL];
+    theme_ctx_style(c, json_get(c->doc, object, "tag_style"), &e->tag_style);
+    return 1;
+}
+
+/* filter: "category" must be a string of at most THEME_NAME_BYTES - 1 bytes; "" means all
+ * news. */
+static int parse_category(theme_ctx *c, int object, theme_element *e)
+{
+    char name[THEME_NAME_BYTES];
+    int tok = json_get(c->doc, object, "category");
+    if (json_kind(c->doc, tok) != JSON_STRING || !json_string(c->doc, tok, name, sizeof name, 0)) return 0;
+    e->category = theme_ctx_string(c, tok);
+    return !name[0] || e->category; /* a non-empty name lost to a full pool would mean "all" */
+}
+
 static int is_https_url(const char *s)
 {
     size_t i;
@@ -44,7 +81,8 @@ static int is_https_url(const char *s)
 }
 
 /* button: "action" is required and must be one this launcher knows (a button that would do
- * nothing is hidden rather than shown dead); open_url also needs an https:// "url". */
+ * nothing is hidden rather than shown dead); open_url also needs an https:// "url" and filter
+ * a "category". */
 static int parse_button(theme_ctx *c, int object, theme_element *e)
 {
     static const struct {
@@ -55,12 +93,16 @@ static int parse_button(theme_ctx *c, int object, theme_element *e)
         {"exit", THEME_ACT_EXIT},
         {"minimize", THEME_ACT_MINIMIZE},
         {"open_url", THEME_ACT_OPEN_URL},
+        {"filter", THEME_ACT_FILTER},
+        {"language", THEME_ACT_LANGUAGE},
+        {"options", THEME_ACT_OPTIONS},
     };
     int tok = json_get(c->doc, object, "action");
     size_t i;
     for (i = 0; i < sizeof actions / sizeof actions[0]; i++) {
         if (!json_string_eq(c->doc, tok, actions[i].name)) continue;
         e->action = actions[i].action;
+        if (e->action == THEME_ACT_FILTER) return parse_category(c, object, e);
         if (e->action != THEME_ACT_OPEN_URL) return 1;
         e->url = theme_ctx_string(c, json_get(c->doc, object, "url"));
         return e->url && is_https_url(theme_str(c->theme, e->url));
@@ -76,6 +118,7 @@ static const theme_type_entry TYPES[] = {
     {"countdown", THEME_EL_COUNTDOWN, THEME_ALIGN_LEFT, parse_plain},
     {"status", THEME_EL_STATUS, THEME_ALIGN_LEFT, parse_plain},
     {"button", THEME_EL_BUTTON, THEME_ALIGN_CENTER, parse_button},
+    {"news_list", THEME_EL_NEWS_LIST, THEME_ALIGN_LEFT, parse_news_list},
 };
 
 const theme_type_entry *theme_type_find(const json_doc *doc, int name_tok)

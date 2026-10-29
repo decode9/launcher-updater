@@ -8,3 +8,4 @@ EXPORTS
     BitBlt@36
     CreateRoundRectRgn@24
     GetDeviceCaps@8
+    CreateDIBSection@24

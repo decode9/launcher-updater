@@ -68,6 +68,7 @@
         },
         "radius": {"type": "integer", "minimum": 0, "maximum": 2048, "default": 0},
         "draggable": {"type": "boolean", "default": true},
+        "transparent": {"type": "boolean", "default": false, "description": "Per-pixel alpha window: transparent pixels of the background show the desktop and radius is not used to cut the corners."},
         "title": {
           "description": "Window title: per language, or one string for every language.",
           "oneOf": [
@@ -99,8 +100,17 @@
       "maxItems": 4
     },
     "launcherState": {"enum": ["checking", "locked", "ready", "installing", "error"]},
+    "gradient": {
+      "description": "Linear gradient drawn instead of fill. angle in degrees: 0 = left to right, 90 = top to bottom.",
+      "type": "object",
+      "required": ["colors"],
+      "properties": {
+        "colors": {"type": "array", "items": {"$ref": "#/$defs/color"}, "minItems": 2, "maxItems": 4},
+        "angle": {"type": "integer", "minimum": 0, "maximum": 359, "default": 90}
+      }
+    },
     "styleState": {
-      "description": "Style of one interaction state. hover, pressed and disabled inherit every field they omit from normal.",
+      "description": "Style of one interaction state. hover, pressed, disabled and selected inherit every field they omit from normal.",
       "type": "object",
       "properties": {
         "fill": {"$ref": "#/$defs/color"},
@@ -110,7 +120,10 @@
         "radius": {"type": "integer", "minimum": 0, "maximum": 2048},
         "track": {"$ref": "#/$defs/color"},
         "image": {"oneOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]},
-        "font": {"type": "string"}
+        "font": {"type": "string"},
+        "gradient": {"description": "null removes an inherited gradient.", "oneOf": [{"$ref": "#/$defs/gradient"}, {"type": "null"}]},
+        "brightness": {"type": "integer", "minimum": -100, "maximum": 100, "default": 0, "description": "Applied to the images this element draws."},
+        "opacity": {"type": "integer", "minimum": 0, "maximum": 100, "default": 100, "description": "Applied to the images this element draws."}
       }
     },
     "element": {
@@ -118,7 +131,7 @@
       "required": ["type", "rect"],
       "properties": {
         "type": {
-          "description": "image, text, news, progress, countdown, status, button. Other values are skipped by launchers that do not know them.",
+          "description": "image, text, news, news_list, progress, countdown, status, button. Other values are skipped by launchers that do not know them.",
           "type": "string"
         },
         "rect": {"$ref": "#/$defs/rect"},
@@ -138,7 +151,8 @@
             "normal": {"$ref": "#/$defs/styleState"},
             "hover": {"$ref": "#/$defs/styleState"},
             "pressed": {"$ref": "#/$defs/styleState"},
-            "disabled": {"$ref": "#/$defs/styleState"}
+            "disabled": {"$ref": "#/$defs/styleState"},
+            "selected": {"$ref": "#/$defs/styleState", "description": "A filter button whose category is the active one."}
           }
         }
       },
@@ -152,15 +166,39 @@
           "then": {"properties": {"interval": {"type": "integer", "minimum": 1, "maximum": 3600, "default": 8}}}
         },
         {
+          "if": {"properties": {"type": {"const": "news_list"}}},
+          "then": {
+            "properties": {
+              "row_height": {"type": "integer", "minimum": 8, "maximum": 512, "default": 40},
+              "tag_width": {"type": "integer", "minimum": 0, "maximum": 1024, "default": 0, "description": "0 = no tag column."},
+              "date_width": {"type": "integer", "minimum": 0, "maximum": 1024, "default": 0, "description": "0 = no date column."},
+              "gap": {"type": "integer", "minimum": 0, "maximum": 256, "default": 12},
+              "date_format": {"type": "string", "default": "{mm}-{dd}", "description": "A key of strings (or literal text)."},
+              "tag_style": {"$ref": "#/$defs/styleState", "description": "The tag column; inherits from the element's normal style."}
+            }
+          }
+        },
+        {
           "if": {"properties": {"type": {"const": "button"}}},
           "then": {
             "required": ["action"],
-            "properties": {"action": {"enum": ["play", "exit", "minimize", "open_url"]}},
-            "if": {"properties": {"action": {"const": "open_url"}}},
-            "then": {
-              "required": ["url"],
-              "properties": {"url": {"type": "string", "pattern": "^https://[^\\s\"\\\\]+$"}}
-            }
+            "properties": {"action": {"enum": ["play", "exit", "minimize", "open_url", "filter", "language", "options"]}},
+            "allOf": [
+              {
+                "if": {"properties": {"action": {"const": "open_url"}}},
+                "then": {
+                  "required": ["url"],
+                  "properties": {"url": {"type": "string", "pattern": "^https://[^\\s\"\\\\]+$"}}
+                }
+              },
+              {
+                "if": {"properties": {"action": {"const": "filter"}}},
+                "then": {
+                  "required": ["category"],
+                  "properties": {"category": {"type": "string", "maxLength": 31, "description": "News category; \"\" = all news."}}
+                }
+              }
+            ]
           }
         }
       ]

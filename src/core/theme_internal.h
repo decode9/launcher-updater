@@ -20,6 +20,17 @@ theme_sref theme_ctx_string(theme_ctx *c, int tok);
  * missing (silently) or invalid (THEME_WARN_BAD_VALUE), leaving *out unchanged. */
 int theme_ctx_uint(theme_ctx *c, int tok, uint32_t min, uint32_t max, uint32_t *out);
 
+/* Reads a signed integer in [min, max]; same contract as theme_ctx_uint. */
+int theme_ctx_int(theme_ctx *c, int tok, int32_t min, int32_t max, int32_t *out);
+
+/* Copies a NUL-terminated C string into the pool (for defaults). 0 if empty or the pool is
+ * full (THEME_WARN_POOL_FULL). */
+theme_sref theme_ctx_literal(theme_ctx *c, const char *s);
+
+/* Overlays the fields present in style object `object` on *s, which holds the inherited values
+ * (invalid values keep the inherited one; a non-object changes nothing). */
+void theme_ctx_style(theme_ctx *c, int object, theme_style *s);
+
 /* Blob index for a "<sha256>" string, or -1 for missing/null (silently) or invalid
  * (THEME_WARN_BAD_VALUE) or over THEME_MAX_BLOBS (THEME_WARN_LIMIT_BLOBS). */
 int theme_ctx_blob(theme_ctx *c, int tok, int is_font);

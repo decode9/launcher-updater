@@ -16,6 +16,14 @@
  * EXIT_WAIT_MS for the worker; a worker stuck in a blocking call is cut off with the process.
  *
  * The window starts with the cached theme when it is complete, else the built-in neutral one.
+ *
+ * Menus (on_menu): language -> window_set_language; repair and game settings are flags the worker
+ * serves while it waits (a repair goes through flow_on_repair); "open game folder" is a shell
+ * call on the UI thread.
+ *
+ * Language (window_set_language): the UI thread changes the preference in memory and the window
+ * at once; the worker then saves prefs.json and parses the last status again so the news titles
+ * follow. g_lang belongs to the worker once it runs.
  */
 #include "app.h"
 #include "app_internal.h"
@@ -24,6 +32,7 @@
 #include "core/str.h"
 #include "core/theme.h"
 #include "log.h"
+#include "prefs.h"
 #include "platform/win32/instance.h"
 #include "platform/win32/proc.h"
 #include "platform/win32/rt.h"
@@ -48,7 +57,7 @@ static char g_status_cache[APP_STATUS_MAX];
 static uint8_t g_blobs[THEME_MAX_BLOBS][SHA256_BYTES];
 static uint8_t g_theme_sha[SHA256_BYTES];
 static int g_theme_known; /* g_theme_sha is the SHA-256 of the theme on screen */
-static char g_lang[THEME_NAME_BYTES];
+static char g_lang[PREFS_LANG_BYTES]; /* worker's copy of prefs_language (show) */
 static status_news g_news[STATUS_NEWS_MAX];      /* the list on screen */
 static status_news g_next_news[STATUS_NEWS_MAX]; /* the list being prepared */
 static uint32_t g_news_count;
@@ -56,7 +65,9 @@ static int g_news_shown; /* g_news has been handed to the UI */
 
 static thread_event g_wake;
 static thread_handle g_worker;
-static volatile int g_play, g_cancel;
+static volatile int g_play, g_repair, g_cancel; /* g_repair: "Verify and repair files" (Options menu) */
+static volatile int g_settings;                 /* "Game settings" (Options menu): start settings.exe */
+static volatile int g_relang;                   /* the language changed: save it, parse the status again */
 static int g_skip_update;
 
 /* ---- texts ---------------------------------------------------------------------------- */
@@ -86,6 +97,24 @@ static void apply_view(const flow_view *view)
 static int take_play(void)
 {
     return __atomic_exchange_n(&g_play, 0, __ATOMIC_ACQ_REL);
+}
+
+/* A repair request since the last call (same contract as take_play). */
+static int take_repair(void)
+{
+    return __atomic_exchange_n(&g_repair, 0, __ATOMIC_ACQ_REL);
+}
+
+/* A "Game settings" request since the last call (same contract as take_play). */
+static int take_settings(void)
+{
+    return __atomic_exchange_n(&g_settings, 0, __ATOMIC_ACQ_REL);
+}
+
+/* A language change since the last call (same contract as take_play). */
+static int take_relang(void)
+{
+    return __atomic_exchange_n(&g_relang, 0, __ATOMIC_ACQ_REL);
 }
 
 /* ---- theme ---------------------------------------------------------------------------- */
@@ -187,6 +216,15 @@ static void refresh_news(void)
     ui_set_news(g_news, n);
 }
 
+/* Worker side of window_set_language: saves the choice and shows the news of the last status
+ * in the new language (the UI already shows the theme texts in it). */
+static void apply_language(void)
+{
+    prefs_save();
+    prefs_language(g_lang, sizeof g_lang);
+    if (app_reparse_status()) refresh_news();
+}
+
 /* ---- play ----------------------------------------------------------------------------- */
 
 static void on_progress(void *user, const install_progress *p)
@@ -212,8 +250,11 @@ static void expand_arg(char *out, size_t cap, const char *arg)
     }
 }
 
-/* launch.exe is a confined relative path (config_parse); it runs in the launcher folder. */
-static int launch_game(void)
+/* Starts one program of launcher.json (launch or settings): exe is a confined relative path
+ * (config_parse), run in the launcher folder with its args ({server} expanded). what names it
+ * in the log. */
+static int start_program(const char *what, const char *rel_exe, uint32_t argc,
+                         const char (*cfg_args)[CONFIG_ARG_BYTES])
 {
     static char exe[FS_PATH_BYTES];
     static char args[CONFIG_ARGS_MAX][ARG_BYTES];
@@ -221,20 +262,37 @@ static int launch_game(void)
     uint32_t i;
     int ok;
     strbuf *sb;
-    for (i = 0; i < app_config.launch_argc; i++) {
-        expand_arg(args[i], ARG_BYTES, app_config.launch_args[i]);
+    for (i = 0; i < argc; i++) {
+        expand_arg(args[i], ARG_BYTES, cfg_args[i]);
         argv[i] = args[i];
     }
-    ok = fs_join(exe, sizeof exe, app_dir, app_config.launch_exe) &&
-         proc_launch(exe, argv, app_config.launch_argc, app_dir);
+    ok = fs_join(exe, sizeof exe, app_dir, rel_exe) && proc_launch(exe, argv, argc, app_dir);
     sb = log_begin();
-    sb_add(sb, ok ? "launch: started " : "error: launch: cannot start ");
-    sb_add(sb, app_config.launch_exe);
+    if (!ok) sb_add(sb, "error: ");
+    sb_add(sb, what);
+    sb_add(sb, ok ? ": started " : ": cannot start ");
+    sb_add(sb, rel_exe);
     sb_add(sb, " (");
-    sb_add_u64(sb, app_config.launch_argc);
+    sb_add_u64(sb, argc);
     sb_add(sb, " args)");
     log_end();
     return ok;
+}
+
+static int launch_game(void)
+{
+    return start_program("launch", app_config.launch_exe, app_config.launch_argc,
+                         (const char (*)[CONFIG_ARG_BYTES])app_config.launch_args);
+}
+
+/* "Game settings": the settings program of launcher.json; a failure is shown as the status
+ * until the next screen change. */
+static void launch_settings(void)
+{
+    if (!app_config.has_settings) return;
+    if (!start_program("settings", app_config.settings_exe, app_config.settings_argc,
+                       (const char (*)[CONFIG_ARG_BYTES])app_config.settings_args))
+        show("status.settings_failed", "The game settings could not be started.");
 }
 
 /* ---- worker --------------------------------------------------------------------------- */
@@ -295,12 +353,18 @@ static uint32_t jitter_seed(void)
     return sys_ticks_ms() ^ (proc_current_id() * 2654435761u);
 }
 
-/* Waits up to ms for Play; a click the flow ignores does not restart the wait. */
+/* Waits up to ms for Play or a repair request; one the flow ignores does not restart the wait. */
 static flow_step wait_step(flow_state *f, uint32_t ms)
 {
     uint32_t start = sys_ticks_ms(), spent;
     flow_step s;
     while (!app_quitting()) {
+        if (take_relang()) apply_language();
+        if (take_settings()) launch_settings();
+        if (take_repair()) {
+            s = flow_on_repair(f);
+            if (s.action != FLOW_DO_NONE) return s;
+        }
         if (take_play()) {
             s = flow_on_play(f);
             if (s.action != FLOW_DO_NONE) return s;
@@ -312,10 +376,10 @@ static flow_step wait_step(flow_state *f, uint32_t ms)
     return flow_on_timeout(f);
 }
 
-static flow_step install_step(flow_state *f)
+static flow_step install_step(flow_state *f, int repair)
 {
     install_result *result;
-    if (app_install_release(on_progress, 0, &g_cancel, &result) == 0) return flow_on_install(f, FLOW_INSTALL_OK);
+    if (app_install_release(on_progress, 0, &g_cancel, repair, &result) == 0) return flow_on_install(f, FLOW_INSTALL_OK);
     return flow_on_install(f, result->error == INSTALL_ERR_SPACE ? FLOW_INSTALL_NO_SPACE : FLOW_INSTALL_FAILED);
 }
 
@@ -334,11 +398,12 @@ static void run_flow(void)
                 return;
             }
             if (app_quitting()) return;
+            if (take_relang()) apply_language(); /* changed while fetching: this status follows it */
             if (take_play()) flow_on_play(&f); /* clicked while fetching: this status serves it */
             step = flow_on_status(&f, &facts, jitter_seed());
             break;
         case FLOW_DO_WAIT: step = wait_step(&f, step.wait_ms); break;
-        case FLOW_DO_INSTALL: step = install_step(&f); break;
+        case FLOW_DO_INSTALL: step = install_step(&f, step.repair); break;
         case FLOW_DO_LAUNCH: step = flow_on_launch(&f, launch_game()); break;
         case FLOW_DO_CLOSE: ui_close(); return;
         case FLOW_DO_NONE: return; /* never returned as a next step */
@@ -363,6 +428,31 @@ static size_t load_blob(void *ctx, const uint8_t sha[SHA256_BYTES], void *buf, s
 {
     (void)ctx;
     return cache_load_blob(sha, buf, cap);
+}
+
+int window_set_language(const char *lang)
+{
+    char now[PREFS_LANG_BYTES];
+    if (!prefs_set_language(lang)) return 0;
+    prefs_language(now, sizeof now); /* "" (forget the choice) = the Windows language */
+    ui_set_lang(now);
+    g_relang = 1;
+    event_set(&g_wake);
+    return 1;
+}
+
+/* Options and language menus. Repair and game settings only signal the worker (it owns the
+ * flow and the log); opening the folder is a shell call the UI thread makes itself. */
+static void on_menu(void *ctx, ui_menu_item item, const char *arg)
+{
+    (void)ctx;
+    switch (item) {
+    case UI_MENU_LANGUAGE: window_set_language(arg); return;
+    case UI_MENU_OPEN_FOLDER: ui_open_path(app_dir); return;
+    case UI_MENU_REPAIR: g_repair = 1; break;
+    case UI_MENU_GAME_SETTINGS: g_settings = 1; break;
+    }
+    event_set(&g_wake);
 }
 
 /* Only signals the worker: the UI thread never waits on the network. */
@@ -390,7 +480,7 @@ int app_window(void)
         return 0;
     }
     g_skip_update = sys_has_flag("--skip-update");
-    sys_language(g_lang, sizeof g_lang);
+    prefs_language(g_lang, sizeof g_lang);
     config_ok = app_load_config();
     selfupdate_cleanup();
     load_start_theme();
@@ -400,6 +490,8 @@ int app_window(void)
     cfg.load_blob = load_blob;
     cfg.on_action = on_action;
     cfg.instance_key = instance_key();
+    cfg.on_menu = on_menu;
+    cfg.has_settings = config_ok && app_config.has_settings;
     if (!event_create(&g_wake) || !ui_create(&g_theme, &cfg)) {
         log_line("error: cannot create the window");
         app_end();
@@ -422,6 +514,7 @@ int app_window(void)
          * kernel releases the single-instance mutex only when the worker is gone too. */
         proc_terminate_self(0);
     }
+    prefs_save(); /* a choice the worker had no turn to save; this thread owns files now */
     log_line("exit");
     app_unlock();
     app_end();

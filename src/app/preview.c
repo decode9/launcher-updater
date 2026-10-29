@@ -10,9 +10,13 @@
  *   --preview-state <state>  hold one state (checking, locked, ready, installing, error)
  *   --lang <code>            language of the texts instead of the Windows one
  *
+ * The language and options menus work too: a language is applied (not saved), "open game
+ * folder" opens the theme folder, repair and game settings only show a status text.
+ *
  * Problems (rejected theme.json, missing blobs) are shown as the status text.
  */
 #include "preview.h"
+#include "prefs.h"
 
 #include "core/sha256.h"
 #include "core/str.h"
@@ -36,12 +40,14 @@ typedef struct {
 } preview_file;
 
 static theme_model g_theme;
+static char g_lang[PREFS_LANG_BYTES];
 static json_token g_tokens[THEME_JSON_TOKENS];
 static char g_json[JSON_BYTES];
 static uint8_t g_file[UI_BLOB_MAX];
 static preview_file g_files[MAX_FILES];
 static uint32_t g_file_count;
-static status_news g_news[3];
+static status_news g_news[6];
+static char g_dir[FS_PATH_BYTES]; /* the --theme-preview folder, "" = built-in theme */
 
 static const char *const STATE_NAMES[THEME_LS_COUNT] = {"checking", "locked", "ready", "installing", "error"};
 /* Seconds each state lasts in the cycle. */
@@ -94,6 +100,20 @@ static void on_action(void *ctx, theme_action action)
     if (action == THEME_ACT_PLAY) ui_set_status("Play pressed (preview: nothing is started)");
 }
 
+/* Menus work without a launcher folder: the language changes (not saved), the theme folder is
+ * opened, and repair / game settings only say what would happen (always listed, so a theme
+ * author sees the whole options menu). */
+static void on_menu(void *ctx, ui_menu_item item, const char *arg)
+{
+    (void)ctx;
+    switch (item) {
+    case UI_MENU_LANGUAGE: preview_set_language(arg); break;
+    case UI_MENU_OPEN_FOLDER: ui_open_path(g_dir); break;
+    case UI_MENU_REPAIR: ui_set_status("Repair chosen (preview: nothing is verified)"); break;
+    case UI_MENU_GAME_SETTINGS: ui_set_status("Game settings chosen (preview: nothing is started)"); break;
+    }
+}
+
 static void enter_state(theme_launcher_state state)
 {
     g_run.state = state;
@@ -122,20 +142,32 @@ static void tick(void *ctx)
         enter_state((theme_launcher_state)((g_run.state + 1) % THEME_LS_COUNT));
 }
 
-/* Sample news: the theme's background image, then another image of the folder, then text only. */
+/* Sample news: the theme's background image, then another image of the folder, then text only.
+ * Categories (info, updates, events) and dates so filter buttons and news_list have content. */
 static uint32_t make_news(void)
 {
-    static const char *const titles[3] = {"Sample news: images are scaled to cover the area",
-                                          "Second item: the carousel moves every few seconds",
-                                          "Third item has no image"};
-    uint32_t i, n = 3, img = 0;
+    static const struct {
+        const char *title, *category, *date;
+    } items[6] = {
+        {"Sample news: images are scaled to cover the area", "info", "2026-10-28"},
+        {"Second item: the carousel moves every few seconds", "updates", "2026-10-21"},
+        {"Third item has no image", "events", "2026-10-15"},
+        {"Patch notes: balance changes and fixes", "updates", "2026-10-09"},
+        {"Weekend event: double experience", "events", "2026-10-02"},
+        {"A news item without a category, link or date", "", ""},
+    };
+    uint32_t i, n = 6, img = 0;
     memset(g_news, 0, sizeof g_news);
     for (i = 0; i < n; i++) {
-        strbuf sb;
-        str_copy(g_news[i].title, STATUS_TITLE_BYTES, titles[i]);
-        sb_init(&sb, g_news[i].link, STATUS_LINK_BYTES);
-        sb_add(&sb, "https://example.com/news/");
-        sb_add_u64(&sb, i + 1);
+        str_copy(g_news[i].title, STATUS_TITLE_BYTES, items[i].title);
+        str_copy(g_news[i].category, STATUS_CATEGORY_BYTES, items[i].category);
+        str_copy(g_news[i].date, STATUS_DATE_BYTES, items[i].date);
+        if (i < n - 1) {
+            strbuf sb;
+            sb_init(&sb, g_news[i].link, STATUS_LINK_BYTES);
+            sb_add(&sb, "https://example.com/news/");
+            sb_add_u64(&sb, i + 1);
+        }
     }
     if (g_theme.background_image >= 0) {
         memcpy(g_news[0].image, g_theme.blobs[g_theme.background_image].sha256, SHA256_BYTES);
@@ -182,20 +214,32 @@ static int load_theme(const char *dir)
            THEME_OK;
 }
 
+int preview_set_language(const char *lang)
+{
+    if (!prefs_lang_valid(lang)) return 0;
+    str_copy(g_lang, sizeof g_lang, lang);
+    ui_set_lang(g_lang);
+    return 1;
+}
+
 int app_preview(void)
 {
-    static char dir[FS_PATH_BYTES], lang[THEME_NAME_BYTES], hold[16];
+    static char hold[16];
     ui_config cfg;
     uint32_t i;
-    sys_flag_value("--theme-preview", dir, sizeof dir);
-    if (!sys_flag_value("--lang", lang, sizeof lang) || !lang[0]) sys_language(lang, sizeof lang);
-    if (!load_theme(dir)) return 1;
+    sys_flag_value("--theme-preview", g_dir, sizeof g_dir);
+    /* --lang wins; else the saved choice, which falls back to Windows (no folder: app_begin and
+     * prefs_load do not run here, so that is the Windows language today). */
+    if (!sys_flag_value("--lang", g_lang, sizeof g_lang) || !g_lang[0]) prefs_language(g_lang, sizeof g_lang);
+    if (!load_theme(g_dir)) return 1;
 
     memset(&cfg, 0, sizeof cfg);
-    cfg.lang = lang;
+    cfg.lang = g_lang;
     cfg.version = "1.2.3";
     cfg.load_blob = load_blob;
     cfg.on_action = on_action;
+    cfg.on_menu = on_menu;
+    cfg.has_settings = 1;
     if (!ui_create(&g_theme, &cfg)) return 1;
     ui_set_news(g_news, make_news());
 

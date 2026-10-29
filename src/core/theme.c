@@ -91,6 +91,35 @@ int theme_ctx_uint(theme_ctx *c, int tok, uint32_t min, uint32_t max, uint32_t *
     return 1;
 }
 
+int theme_ctx_int(theme_ctx *c, int tok, int32_t min, int32_t max, int32_t *out)
+{
+    int64_t v;
+    if (tok < 0) return 0;
+    if (!json_i64(c->doc, tok, &v) || v < min || v > max) {
+        c->theme->warnings |= THEME_WARN_BAD_VALUE;
+        return 0;
+    }
+    *out = (int32_t)v;
+    return 1;
+}
+
+theme_sref theme_ctx_literal(theme_ctx *c, const char *s)
+{
+    theme_model *t = c->theme;
+    size_t n = str_len(s);
+    if (n == 0) return 0;
+    if (n + 1 > THEME_POOL_BYTES - t->pool_used) {
+        t->warnings |= THEME_WARN_POOL_FULL;
+        return 0;
+    }
+    str_copy(t->pool + t->pool_used, n + 1, s);
+    {
+        theme_sref ref = (theme_sref)t->pool_used;
+        t->pool_used += (uint32_t)n + 1;
+        return ref;
+    }
+}
+
 int theme_ctx_blob(theme_ctx *c, int tok, int is_font)
 {
     theme_model *t = c->theme;
@@ -256,6 +285,7 @@ static void parse_window(theme_ctx *c, int object)
     if (theme_ctx_uint(c, json_get(c->doc, object, "height"), 64, THEME_MAX_SIDE, &v)) t->height = (uint16_t)v;
     if (theme_ctx_uint(c, json_get(c->doc, object, "radius"), 0, MAX_RADIUS, &v)) t->radius = (uint16_t)v;
     if (json_bool(c->doc, json_get(c->doc, object, "draggable"), &draggable)) t->draggable = (uint8_t)draggable;
+    if (json_bool(c->doc, json_get(c->doc, object, "transparent"), &draggable)) t->transparent = (uint8_t)draggable;
 
     if (json_kind(c->doc, bg) == JSON_STRING) {
         ctx_color(c, bg, &t->background);
@@ -281,7 +311,7 @@ static void parse_window(theme_ctx *c, int object)
 /* ---------------------------------------------------------------- elements */
 
 static const char *const LAUNCHER_STATES[THEME_LS_COUNT] = {"checking", "locked", "ready", "installing", "error"};
-static const char *const STYLE_STATES[THEME_ST_COUNT] = {"normal", "hover", "pressed", "disabled"};
+static const char *const STYLE_STATES[THEME_ST_COUNT] = {"normal", "hover", "pressed", "disabled", "selected"};
 
 static uint8_t state_bit(const json_doc *doc, int tok)
 {
@@ -314,11 +344,40 @@ static void parse_align(theme_ctx *c, int tok, uint8_t *align)
     else c->theme->warnings |= THEME_WARN_BAD_VALUE;
 }
 
-/* Overlays the fields present in a style state object on *s (which holds the inherited
- * values). Invalid values keep the inherited one. */
-static void overlay_style(theme_ctx *c, int object, theme_style *s)
+/* gradient: null removes an inherited gradient; an object {"colors": [2..4], "angle"} replaces
+ * it as a whole (a missing angle is the default, not the inherited one). Anything invalid
+ * keeps the inherited gradient. */
+static void parse_gradient(theme_ctx *c, int tok, theme_gradient *out)
+{
+    theme_gradient g;
+    int colors, k;
+    uint32_t angle = THEME_GRADIENT_ANGLE;
+    if (tok < 0) return;
+    if (json_is_null(c->doc, tok)) {
+        zero(out, sizeof *out);
+        return;
+    }
+    colors = json_get(c->doc, tok, "colors");
+    if (json_kind(c->doc, colors) != JSON_ARRAY || json_count(c->doc, colors) < 2 ||
+        json_count(c->doc, colors) > THEME_GRADIENT_MAX_COLORS) {
+        c->theme->warnings |= THEME_WARN_BAD_VALUE;
+        return;
+    }
+    zero(&g, sizeof g);
+    for (k = json_first(c->doc, colors); k >= 0; k = json_next(c->doc, k)) {
+        g.colors[g.count] = THEME_COLOR_NONE;
+        if (!ctx_color(c, k, &g.colors[g.count])) return; /* flagged THEME_WARN_BAD_COLOR */
+        g.count++;
+    }
+    theme_ctx_uint(c, json_get(c->doc, tok, "angle"), 0, 359, &angle);
+    g.angle = (uint16_t)angle;
+    *out = g;
+}
+
+void theme_ctx_style(theme_ctx *c, int object, theme_style *s)
 {
     uint32_t v;
+    int32_t sv;
     int image;
     if (json_kind(c->doc, object) != JSON_OBJECT) return;
     ctx_color(c, json_get(c->doc, object, "fill"), &s->fill);
@@ -331,6 +390,9 @@ static void overlay_style(theme_ctx *c, int object, theme_style *s)
     if (json_is_null(c->doc, image)) s->image = -1;
     else if (image >= 0 && (image = theme_ctx_blob(c, image, 0)) >= 0) s->image = (int16_t)image;
     ctx_font(c, json_get(c->doc, object, "font"), &s->font);
+    parse_gradient(c, json_get(c->doc, object, "gradient"), &s->gradient);
+    if (theme_ctx_int(c, json_get(c->doc, object, "brightness"), -100, 100, &sv)) s->brightness = (int8_t)sv;
+    if (theme_ctx_uint(c, json_get(c->doc, object, "opacity"), 0, 100, &v)) s->opacity = (uint8_t)v;
 }
 
 /* rect [x, y, w, h] of non-negative integers, clipped to the window. 0 if unusable. */
@@ -400,16 +462,19 @@ static void parse_element(theme_ctx *c, int object)
     base.radius = 0;
     base.image = -1;
     base.font = t->default_font;
+    zero(&base.gradient, sizeof base.gradient);
+    base.brightness = 0;
+    base.opacity = 100;
     theme_color_resolve(t, "text", THEME_COLOR_TEXT, &base.color);
     ctx_color(c, json_get(c->doc, object, "color"), &base.color);
     ctx_font(c, json_get(c->doc, object, "font"), &base.font);
 
     style = json_get(c->doc, object, "style");
     e->style[THEME_ST_NORMAL] = base;
-    overlay_style(c, json_get(c->doc, style, STYLE_STATES[THEME_ST_NORMAL]), &e->style[THEME_ST_NORMAL]);
+    theme_ctx_style(c, json_get(c->doc, style, STYLE_STATES[THEME_ST_NORMAL]), &e->style[THEME_ST_NORMAL]);
     for (i = 1; i < THEME_ST_COUNT; i++) {
         e->style[i] = e->style[THEME_ST_NORMAL];
-        overlay_style(c, json_get(c->doc, style, STYLE_STATES[i]), &e->style[i]);
+        theme_ctx_style(c, json_get(c->doc, style, STYLE_STATES[i]), &e->style[i]);
     }
 
     if (!type->parse(c, object, e)) {

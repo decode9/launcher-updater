@@ -8,7 +8,7 @@
 #include "platform/win32/fs.h"
 
 static uint8_t g_buf[APP_BLOB_MAX];
-static char g_path[FS_PATH_BYTES], g_part[FS_PATH_BYTES];
+static char g_path[FS_PATH_BYTES];
 
 static int cache_file(char *out, size_t cap, const char *name)
 {
@@ -44,17 +44,18 @@ size_t cache_load_blob(const uint8_t sha[SHA256_BYTES], void *buf, size_t cap)
 
 int cache_write_atomic(const char *target, const void *data, size_t len)
 {
+    char part[FS_PATH_BYTES]; /* on the stack: the UI thread saves prefs.json through here too */
     fs_file f;
     int ok;
     strbuf sb;
-    sb_init(&sb, g_part, sizeof g_part);
+    sb_init(&sb, part, sizeof part);
     sb_add(&sb, target);
     sb_add(&sb, ".part");
-    if (!sb.ok || !fs_create(&f, g_part)) return 0;
+    if (!sb.ok || !fs_create(&f, part)) return 0;
     ok = fs_write(&f, data, len) && fs_flush(&f);
     fs_close(&f);
-    if (ok) ok = fs_rename(g_part, target);
-    if (!ok) fs_remove(g_part);
+    if (ok) ok = fs_rename(part, target);
+    if (!ok) fs_remove(part);
     return ok;
 }
 

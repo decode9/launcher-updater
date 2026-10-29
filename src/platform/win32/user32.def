@@ -34,3 +34,11 @@ EXPORTS
     SetForegroundWindow@4
     FindWindowW@8
     IsIconic@4
+    UpdateLayeredWindow@36
+    GetWindowLongW@8
+    SetWindowLongW@12
+    ClientToScreen@8
+    CreatePopupMenu@0
+    AppendMenuW@16
+    TrackPopupMenu@28
+    DestroyMenu@4

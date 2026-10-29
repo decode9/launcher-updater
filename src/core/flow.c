@@ -19,6 +19,7 @@ static flow_step step_of(flow_action action, uint32_t wait_ms)
     flow_step s;
     s.action = action;
     s.wait_ms = wait_ms;
+    s.repair = 0;
     s.show = 0;
     s.view = view_of(THEME_LS_CHECKING, 0, 0, 0);
     return s;
@@ -46,11 +47,14 @@ static flow_step fetch(flow_state *f, int show_checking)
     return s;
 }
 
-static flow_step install(flow_state *f)
+static flow_step install(flow_state *f, int repair)
 {
     flow_step s = step_of(FLOW_DO_INSTALL, 0);
     f->phase = FLOW_PH_INSTALLING;
-    f->view = view_of(THEME_LS_INSTALLING, 0, 0, 0);
+    f->repairing = repair;
+    f->view = repair ? view_of(THEME_LS_INSTALLING, "status.repairing", "Checking and repairing the game files...", 0)
+                     : view_of(THEME_LS_INSTALLING, 0, 0, 0);
+    s.repair = repair;
     s.show = 1;
     s.view = f->view;
     return s;
@@ -135,7 +139,7 @@ static flow_step on_unreachable(flow_state *f, const flow_facts *facts, int play
     return show_and_wait(f, offline_view(), FLOW_RETRY_MS);
 }
 
-static flow_step on_fresh(flow_state *f, const flow_facts *facts, int play, uint32_t random)
+static flow_step on_fresh(flow_state *f, const flow_facts *facts, int play, int repair, uint32_t random)
 {
     if (!facts->open) {
         uint32_t ms = locked_delay_ms(f, facts->secs_to_open, random);
@@ -144,13 +148,16 @@ static flow_step on_fresh(flow_state *f, const flow_facts *facts, int play, uint
     }
     f->due_tries = 0;
     f->wait_ms = FLOW_RECHECK_MS;
-    if (play && facts->has_release) return facts->current ? launch(f) : install(f);
+    if (repair && facts->has_release) return install(f, 1);
+    if (play && facts->has_release) return facts->current ? launch(f) : install(f, 0);
     return show_and_wait(f, ready_view(facts), FLOW_RECHECK_MS);
 }
 
 flow_step flow_start(flow_state *f)
 {
     f->play_pending = 0;
+    f->repair_pending = 0;
+    f->repairing = 0;
     f->due_tries = 0;
     f->wait_ms = FLOW_RECHECK_MS;
     return fetch(f, 1);
@@ -158,10 +165,12 @@ flow_step flow_start(flow_state *f)
 
 flow_step flow_on_status(flow_state *f, const flow_facts *facts, uint32_t random)
 {
-    int play = f->play_pending;
+    int repair = f->repair_pending;
+    int play = f->play_pending && !repair; /* a repair wins over a click on the same fetch */
     f->play_pending = 0; /* served by this status, or dropped when it cannot be played */
+    f->repair_pending = 0;
     if (!facts->reachable) return on_unreachable(f, facts, play);
-    return on_fresh(f, facts, play, random);
+    return on_fresh(f, facts, play, repair, random);
 }
 
 flow_step flow_on_play(flow_state *f)
@@ -175,13 +184,36 @@ flow_step flow_on_play(flow_state *f)
     return fetch(f, 1);
 }
 
+flow_step flow_on_repair(flow_state *f)
+{
+    if (f->phase != FLOW_PH_WAITING || (f->view.screen != THEME_LS_READY && f->view.screen != THEME_LS_ERROR))
+        return step_of(FLOW_DO_NONE, 0);
+    f->repair_pending = 1;
+    f->play_pending = 0;
+    return fetch(f, 1);
+}
+
 flow_step flow_on_timeout(flow_state *f)
 {
     return fetch(f, 0);
 }
 
+/* A repair never launches: success re-reads the status, which shows the usual screen; failure
+ * shows the error screen until the next poll (FLOW_RETRY_MS), where repair can be retried. */
+static flow_step repair_done(flow_state *f, flow_install_result result)
+{
+    f->repairing = 0;
+    if (result == FLOW_INSTALL_OK) return fetch(f, 1);
+    if (result == FLOW_INSTALL_NO_SPACE)
+        return show_and_wait(f, view_of(THEME_LS_ERROR, "status.no_space", "Not enough free disk space for the update.", 0),
+                             FLOW_RETRY_MS);
+    return show_and_wait(f, view_of(THEME_LS_ERROR, "status.repair_failed", "The repair failed. Try again from Options.", 0),
+                         FLOW_RETRY_MS);
+}
+
 flow_step flow_on_install(flow_state *f, flow_install_result result)
 {
+    if (f->repairing) return repair_done(f, result);
     if (result == FLOW_INSTALL_OK) return launch(f);
     if (result == FLOW_INSTALL_NO_SPACE)
         return show_and_wait(f, view_of(THEME_LS_READY, "status.no_space", "Not enough free disk space for the update.", 1),

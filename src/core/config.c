@@ -51,20 +51,42 @@ int config_split_https_url(const char *url, char *host, size_t host_cap, unsigne
     return str_copy_n(prefix, prefix_cap, p, n);
 }
 
+/* A program to start: {"exe": safe relative path, "args": null/absent or up to CONFIG_ARGS_MAX
+ * strings}. Shared by "launch" and "settings"; 0 if invalid (exe/argc/args then undefined). */
+static int parse_program(const json_doc *doc, int node, char exe[PATH_MAX_BYTES], uint32_t *argc,
+                         char args[CONFIG_ARGS_MAX][CONFIG_ARG_BYTES])
+{
+    int list, a;
+    *argc = 0;
+    if (json_kind(doc, node) != JSON_OBJECT) return 0;
+    if (!json_string(doc, json_get(doc, node, "exe"), exe, PATH_MAX_BYTES, 0) || !path_is_safe_relative(exe))
+        return 0;
+    list = json_get(doc, node, "args");
+    if (list < 0 || json_is_null(doc, list)) return 1;
+    if (json_kind(doc, list) != JSON_ARRAY || json_count(doc, list) > CONFIG_ARGS_MAX) return 0;
+    for (a = json_first(doc, list); a >= 0; a = json_next(doc, a)) {
+        if (!json_string(doc, a, args[*argc], CONFIG_ARG_BYTES, 0)) return 0;
+        (*argc)++;
+    }
+    return 1;
+}
+
 static config_error parse_launch(launcher_config *cfg, const json_doc *doc, int launch)
 {
-    int args, a;
-    if (json_kind(doc, launch) != JSON_OBJECT) return CONFIG_ERR_LAUNCH;
-    if (!json_string(doc, json_get(doc, launch, "exe"), cfg->launch_exe, sizeof cfg->launch_exe, 0) ||
-        !path_is_safe_relative(cfg->launch_exe))
-        return CONFIG_ERR_LAUNCH;
-    args = json_get(doc, launch, "args");
-    if (args < 0 || json_is_null(doc, args)) return CONFIG_OK;
-    if (json_kind(doc, args) != JSON_ARRAY || json_count(doc, args) > CONFIG_ARGS_MAX) return CONFIG_ERR_LAUNCH;
-    for (a = json_first(doc, args); a >= 0; a = json_next(doc, a)) {
-        if (!json_string(doc, a, cfg->launch_args[cfg->launch_argc], CONFIG_ARG_BYTES, 0)) return CONFIG_ERR_LAUNCH;
-        cfg->launch_argc++;
+    return parse_program(doc, launch, cfg->launch_exe, &cfg->launch_argc, cfg->launch_args) ? CONFIG_OK
+                                                                                            : CONFIG_ERR_LAUNCH;
+}
+
+/* Optional: absent or null = none. */
+static config_error parse_settings(launcher_config *cfg, const json_doc *doc, int settings)
+{
+    if (settings < 0 || json_is_null(doc, settings)) return CONFIG_OK;
+    if (!parse_program(doc, settings, cfg->settings_exe, &cfg->settings_argc, cfg->settings_args)) {
+        cfg->settings_exe[0] = 0;
+        cfg->settings_argc = 0;
+        return CONFIG_ERR_SETTINGS;
     }
+    cfg->has_settings = 1;
     return CONFIG_OK;
 }
 
@@ -76,10 +98,14 @@ config_error config_parse(launcher_config *cfg, const char *text, size_t len, js
     int blobs;
     size_t hex_len;
 
-    cfg->server[0] = cfg->blobs_url[0] = cfg->launch_exe[0] = 0;
+    config_error e;
+
+    cfg->server[0] = cfg->blobs_url[0] = cfg->launch_exe[0] = cfg->settings_exe[0] = 0;
     cfg->port = 0;
     cfg->has_blobs_url = 0;
     cfg->launch_argc = 0;
+    cfg->has_settings = 0;
+    cfg->settings_argc = 0;
 
     if (json_parse(&doc, text, len, tokens, cap) != JSON_OK || json_kind(&doc, 0) != JSON_OBJECT)
         return CONFIG_ERR_JSON;
@@ -98,7 +124,9 @@ config_error config_parse(launcher_config *cfg, const char *text, size_t len, js
             return CONFIG_ERR_BLOBS_URL;
         cfg->has_blobs_url = 1;
     }
-    return parse_launch(cfg, &doc, json_get(&doc, 0, "launch"));
+    e = parse_launch(cfg, &doc, json_get(&doc, 0, "launch"));
+    if (e) return e;
+    return parse_settings(cfg, &doc, json_get(&doc, 0, "settings"));
 }
 
 const char *config_error_text(config_error error)
@@ -111,6 +139,7 @@ const char *config_error_text(config_error error)
     case CONFIG_ERR_FINGERPRINT: return "\"fingerprint\" must be 64 lowercase hex digits";
     case CONFIG_ERR_BLOBS_URL: return "\"blobs_url\" must be null or an https:// URL";
     case CONFIG_ERR_LAUNCH: return "invalid \"launch\" (exe must be a safe relative path)";
+    case CONFIG_ERR_SETTINGS: return "invalid \"settings\" (exe must be a safe relative path)";
     }
     return "unknown error";
 }

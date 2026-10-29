@@ -5,6 +5,7 @@
 #include "app_internal.h"
 #include "core/manifest.h"
 #include "log.h"
+#include "prefs.h"
 #include "platform/win32/http.h"
 #include "platform/win32/instance.h"
 #include "platform/win32/install_port.h"
@@ -29,6 +30,8 @@ typedef struct {
 } memory_sink;
 
 static char status_text[APP_STATUS_MAX];
+static const char *parsed_text; /* the document behind app_status, for app_reparse_status */
+static size_t parsed_len;
 static volatile int quitting;
 
 void app_request_quit(void)
@@ -148,9 +151,10 @@ int app_fetch_status(void)
     http_head head;
     http_error e;
     status_error se;
-    char lang[8];
+    char lang[PREFS_LANG_BYTES];
     strbuf *sb;
     if (quitting) return 0;
+    parsed_text = 0; /* status_text is overwritten from here on */
     e = http_get(&target, "/v1/status", 0, &head, to_memory, &sink);
     if (e != HTTP_OK) {
         sb = log_begin();
@@ -167,7 +171,7 @@ int app_fetch_status(void)
         return 0;
     }
     status_len = sink.len;
-    sys_language(lang, sizeof lang);
+    prefs_language(lang, sizeof lang);
     se = status_parse(&app_status, status_text, sink.len, tokens, sizeof tokens / sizeof tokens[0], lang);
     if (se != STATUS_OK) {
         sb = log_begin();
@@ -176,6 +180,8 @@ int app_fetch_status(void)
         log_end();
         return 0;
     }
+    parsed_text = status_text;
+    parsed_len = sink.len;
     log_status();
     return 1;
 }
@@ -188,9 +194,22 @@ const char *app_status_text(size_t *len)
 
 int app_parse_status(const char *text, size_t len)
 {
-    char lang[8];
-    sys_language(lang, sizeof lang);
-    return status_parse(&app_status, text, len, tokens, sizeof tokens / sizeof tokens[0], lang) == STATUS_OK;
+    char lang[PREFS_LANG_BYTES];
+    parsed_text = 0;
+    prefs_language(lang, sizeof lang);
+    if (status_parse(&app_status, text, len, tokens, sizeof tokens / sizeof tokens[0], lang) != STATUS_OK) return 0;
+    parsed_text = text;
+    parsed_len = len;
+    return 1;
+}
+
+int app_reparse_status(void)
+{
+    char lang[PREFS_LANG_BYTES];
+    if (!parsed_text) return 0;
+    prefs_language(lang, sizeof lang);
+    return status_parse(&app_status, parsed_text, parsed_len, tokens, sizeof tokens / sizeof tokens[0], lang) ==
+           STATUS_OK;
 }
 
 int app_begin(const char *mode)
@@ -198,6 +217,7 @@ int app_begin(const char *mode)
     strbuf *sb;
     if (!fs_exe_dir(app_dir, sizeof app_dir)) return 0;
     if (fs_join(path, sizeof path, app_dir, APP_LOG_FILE)) log_open(path);
+    prefs_load();
     sb = log_begin();
     sb_add(sb, "launcher " LAUNCHER_VERSION);
     if (mode && mode[0]) {
@@ -381,20 +401,21 @@ static void log_progress_cb(void *user, const install_progress *p)
 
 int app_release_is_current(void)
 {
-    install_ctx ctx = {&install_files, &install_blobs, 0, 0, 0, app_exe_name};
+    install_ctx ctx = {&install_files, &install_blobs, 0, 0, 0, app_exe_name, 0};
     return app_status.release.present && app_ports_init() && install_is_current(&ctx, app_status.release.version);
 }
 
 int app_install_interrupted(void)
 {
-    install_ctx ctx = {&install_files, &install_blobs, 0, 0, 0, app_exe_name};
+    install_ctx ctx = {&install_files, &install_blobs, 0, 0, 0, app_exe_name, 0};
     return app_ports_init() && install_is_interrupted(&ctx);
 }
 
-int app_install_release(install_progress_fn progress, void *user, volatile const int *cancel,
+int app_install_release(install_progress_fn progress, void *user, volatile const int *cancel, int repair,
                         install_result **out)
 {
-    install_ctx ctx = {&install_files, &install_blobs, progress ? progress : log_progress_cb, user, cancel, app_exe_name};
+    install_ctx ctx = {&install_files, &install_blobs, progress ? progress : log_progress_cb, user, cancel, app_exe_name,
+                       repair};
     strbuf *sb;
     if (out) *out = &result;
     result.error = INSTALL_OK;
@@ -404,7 +425,7 @@ int app_install_release(install_progress_fn progress, void *user, volatile const
         return 2;
     }
     if (!app_ports_init()) return 1;
-    if (install_is_current(&ctx, app_status.release.version)) {
+    if (!repair && install_is_current(&ctx, app_status.release.version)) {
         sb = log_begin();
         sb_add(sb, "install: release ");
         sb_add(sb, app_status.release.version);
@@ -417,7 +438,7 @@ int app_install_release(install_progress_fn progress, void *user, volatile const
         return 2;
     }
     sb = log_begin();
-    sb_add(sb, "install: release ");
+    sb_add(sb, repair ? "repair: release " : "install: release ");
     sb_add(sb, manifest.version);
     sb_add(sb, ", ");
     sb_add_u64(sb, manifest.op_count);
@@ -458,7 +479,7 @@ int app_install(void)
     if (!app_lock(0)) code = APP_EXIT_BUSY;
     else if (!app_load_config()) code = 1;
     else if (!app_fetch_status()) code = 2;
-    else code = app_install_release(0, 0, 0, 0);
+    else code = app_install_release(0, 0, 0, 0, 0);
     app_unlock();
     app_end();
     return code;

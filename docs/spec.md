@@ -32,7 +32,8 @@ from `launcher.json`.
   "open": false,
   "opens_at": "2026-11-11T13:00:00Z",
   "news": [
-    {"image": "<sha256>", "title": {"en": "Beta starts 11.11.2026", "es": "La beta empieza el 11.11.2026"}, "link": "https://…"}
+    {"image": "<sha256>", "title": {"en": "Beta starts 11.11.2026", "es": "La beta empieza el 11.11.2026"}, "link": "https://…",
+     "category": "events", "date": "2026-10-27"}
   ],
   "theme":    {"sha256": "<sha256>", "size": 1234},
   "release":  {"version": "2026.10.27.1", "sha256": "<sha256>", "size": 5678},
@@ -47,6 +48,13 @@ from `launcher.json`.
   `release` may be absent or `null` while no version has been published yet; a `release` that is
   present must be a complete blob with a non-empty `version`.
 - News titles: the user's language, else `en`, else the first one. Links must be `https://`.
+- News `category` (optional): 1 to 31 characters of `a-z`, `0-9`, `_` and `-` (lowercase). Themes
+  filter the news list by it, comparing exactly; an item without one only shows under "all".
+- News `date` (optional): the day it is about or was published, `"YYYY-MM-DD"` (a real calendar
+  day, year 1970 or later); themes choose how to show it (e.g. `{dd}.{mm}`).
+- An invalid `category` or `date` is treated as absent: the item still shows, and an invalid
+  link only disables the click. Both fields are additive (`schema` stays 1): launchers before
+  0.3.0 ignore them.
 - Unknown fields are ignored (both sides).
 
 ## Release manifest (JSON blob)
@@ -223,13 +231,17 @@ Any failure keeps the running version, which carries on and logs why. A theme wh
   "port": 5103,
   "fingerprint": "<64 hex>",
   "blobs_url": null,
-  "launch": {"exe": "Game.exe", "args": ["0", "0", "{server}"]}
+  "launch": {"exe": "Game.exe", "args": ["0", "0", "{server}"]},
+  "settings": {"exe": "Setup.exe", "args": []}
 }
 ```
 - `server`: host name or IPv4 (letters, digits, `.`, `-`). `port`: 1–65535.
 - `blobs_url`: `null` or an `https://` URL.
 - `launch.exe` must be a relative path inside the launcher folder (same rules as the
   manifest). `{server}` in `args` is replaced by `server`.
+- `settings` (optional; absent or `null` = none): the game's own configuration program, opened
+  from the launcher's options. Same shape and validation as `launch` (`exe` a safe relative path,
+  `args` optional, at most 16 strings); an invalid `settings` makes `launcher.json` invalid.
 
 ## Theme (JSON blob)
 Full schema: [`theme.schema.json`](theme.schema.json); guide for theme authors: [`theming.md`](theming.md).

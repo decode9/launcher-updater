@@ -2,11 +2,14 @@
  * config.h - launcher.json, the file shipped next to the executable (docs/spec.md):
  *
  *   {"server": "play.example.com", "port": 5103, "fingerprint": "<64 lowercase hex>",
- *    "blobs_url": null, "launch": {"exe": "Game.exe", "args": ["{server}"]}}
+ *    "blobs_url": null, "launch": {"exe": "Game.exe", "args": ["{server}"]},
+ *    "settings": {"exe": "Setup.exe", "args": []}}
  *
  * server: host name or IPv4 (letters, digits, '.', '-'). port: 1-65535. fingerprint: SHA-256 of
  * the server certificate (DER). blobs_url: null/absent or an https:// URL. launch.exe: a safe
- * relative path (path.h). launch.args: optional array of strings. Unknown fields are ignored.
+ * relative path (path.h). launch.args: optional array of strings. settings: optional (absent or
+ * null = none), the game's own configuration program, validated exactly like launch (invalid ->
+ * CONFIG_ERR_SETTINGS). Unknown fields are ignored.
  */
 #ifndef LAUNCHER_CORE_CONFIG_H
 #define LAUNCHER_CORE_CONFIG_H
@@ -32,6 +35,10 @@ typedef struct {
     char launch_exe[PATH_MAX_BYTES];
     uint32_t launch_argc;
     char launch_args[CONFIG_ARGS_MAX][CONFIG_ARG_BYTES];
+    int has_settings; /* "settings" present: settings_* hold it */
+    char settings_exe[PATH_MAX_BYTES];
+    uint32_t settings_argc;
+    char settings_args[CONFIG_ARGS_MAX][CONFIG_ARG_BYTES];
 } launcher_config;
 
 typedef enum {
@@ -41,7 +48,8 @@ typedef enum {
     CONFIG_ERR_PORT,
     CONFIG_ERR_FINGERPRINT,
     CONFIG_ERR_BLOBS_URL,
-    CONFIG_ERR_LAUNCH
+    CONFIG_ERR_LAUNCH,
+    CONFIG_ERR_SETTINGS
 } config_error;
 
 /* tokens/cap: scratch token arena for the JSON parser (64 tokens are plenty). */

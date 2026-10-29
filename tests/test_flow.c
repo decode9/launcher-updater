@@ -402,6 +402,129 @@ TEST(h11_series_restarts_when_state_changes)
     CHECK_EQ_U64(s.wait_ms, 5000);
 }
 
+/* ---- repair (Options -> repair) ---------------------------------------------------- */
+
+TEST(repair_from_ready_verifies_and_does_not_launch)
+{
+    flow_state f;
+    flow_facts x = open_facts(1);
+    flow_step s;
+    first(&f, x);
+    s = flow_on_repair(&f);
+    CHECK(s.action == FLOW_DO_FETCH && s.show && s.view.screen == THEME_LS_CHECKING);
+    s = flow_on_status(&f, &x, 0);
+    CHECK(s.action == FLOW_DO_INSTALL && s.repair && s.show && s.view.screen == THEME_LS_INSTALLING);
+    CHECK(key_is(&s, "status.repairing") && !s.view.play_enabled);
+    s = flow_on_play(&f); /* ignored while repairing */
+    CHECK(s.action == FLOW_DO_NONE);
+    s = flow_on_install(&f, FLOW_INSTALL_OK);
+    CHECK(s.action == FLOW_DO_FETCH && s.show && s.view.screen == THEME_LS_CHECKING);
+    s = flow_on_status(&f, &x, 0);
+    CHECK(waits_on(&s, THEME_LS_READY, 0, FLOW_RECHECK_MS) && s.view.play_enabled && !s.repair);
+    /* the next Play is a normal one: it launches */
+    flow_on_play(&f);
+    s = flow_on_status(&f, &x, 0);
+    CHECK(s.action == FLOW_DO_LAUNCH);
+}
+
+TEST(repair_failure_shows_error_then_recovers)
+{
+    flow_state f;
+    flow_facts x = open_facts(1);
+    flow_step s;
+    first(&f, x);
+    flow_on_repair(&f);
+    flow_on_status(&f, &x, 0);
+    s = flow_on_install(&f, FLOW_INSTALL_FAILED);
+    CHECK(waits_on(&s, THEME_LS_ERROR, "status.repair_failed", FLOW_RETRY_MS) && !s.view.play_enabled);
+    /* allowed again from the error screen */
+    s = flow_on_repair(&f);
+    CHECK(s.action == FLOW_DO_FETCH);
+    s = flow_on_status(&f, &x, 0);
+    CHECK(s.action == FLOW_DO_INSTALL && s.repair);
+    s = flow_on_install(&f, FLOW_INSTALL_NO_SPACE);
+    CHECK(waits_on(&s, THEME_LS_ERROR, "status.no_space", FLOW_RETRY_MS));
+    /* the poll puts the usual screen back */
+    flow_on_timeout(&f);
+    s = flow_on_status(&f, &x, 0);
+    CHECK(waits_on(&s, THEME_LS_READY, 0, FLOW_RECHECK_MS) && s.view.play_enabled);
+}
+
+TEST(repair_ignored_outside_ready_and_error)
+{
+    flow_state f;
+    flow_facts x = open_facts(0);
+    flow_step s;
+    first(&f, locked_facts(3600));
+    s = flow_on_repair(&f);
+    CHECK(s.action == FLOW_DO_NONE);
+    flow_start(&f); /* checking */
+    s = flow_on_repair(&f);
+    CHECK(s.action == FLOW_DO_NONE);
+    first(&f, x);
+    flow_on_play(&f);
+    flow_on_status(&f, &x, 0); /* installing */
+    s = flow_on_repair(&f);
+    CHECK(s.action == FLOW_DO_NONE);
+    s = flow_on_install(&f, FLOW_INSTALL_OK);
+    CHECK(s.action == FLOW_DO_LAUNCH); /* the Play install still launches */
+}
+
+TEST(repair_dropped_when_status_cannot_install)
+{
+    flow_state f;
+    flow_facts x = open_facts(1);
+    flow_facts locked = locked_facts(3600);
+    flow_facts gone = no_server(1, 1);
+    flow_step s;
+    first(&f, x);
+    flow_on_repair(&f);
+    s = flow_on_status(&f, &locked, 0);
+    CHECK(s.action == FLOW_DO_WAIT && s.view.screen == THEME_LS_LOCKED);
+    first(&f, x);
+    flow_on_repair(&f);
+    s = flow_on_status(&f, &gone, 0);
+    CHECK(waits_on(&s, THEME_LS_READY, "status.offline", FLOW_RETRY_MS)); /* not launched either */
+    first(&f, x);
+    flow_on_repair(&f);
+    x.has_release = 0;
+    s = flow_on_status(&f, &x, 0);
+    CHECK(waits_on(&s, THEME_LS_READY, "status.no_release", FLOW_RECHECK_MS));
+    /* dropped for good: the next status is a plain one */
+    x.has_release = 1;
+    flow_on_timeout(&f);
+    s = flow_on_status(&f, &x, 0);
+    CHECK(waits_on(&s, THEME_LS_READY, 0, FLOW_RECHECK_MS));
+}
+
+TEST(repair_wins_over_a_click_on_the_same_fetch)
+{
+    flow_state f;
+    flow_facts x = open_facts(1);
+    flow_step s;
+    first(&f, x);
+    flow_on_repair(&f);
+    s = flow_on_play(&f); /* while fetching: remembered, then dropped for the repair */
+    CHECK(s.action == FLOW_DO_NONE);
+    s = flow_on_status(&f, &x, 0);
+    CHECK(s.action == FLOW_DO_INSTALL && s.repair);
+    s = flow_on_install(&f, FLOW_INSTALL_OK);
+    CHECK(s.action == FLOW_DO_FETCH);
+    s = flow_on_status(&f, &x, 0);
+    CHECK(s.action == FLOW_DO_WAIT);
+}
+
+TEST(play_install_is_not_a_repair)
+{
+    flow_state f;
+    flow_facts x = open_facts(0);
+    flow_step s;
+    first(&f, x);
+    flow_on_play(&f);
+    s = flow_on_status(&f, &x, 0);
+    CHECK(s.action == FLOW_DO_INSTALL && !s.repair && key_is(&s, 0));
+}
+
 int main(void)
 {
     RUN(start_fetches_while_checking);
@@ -426,5 +549,11 @@ int main(void)
     RUN(h11_due_backoff);
     RUN(h11_jitter_bounds);
     RUN(h11_series_restarts_when_state_changes);
+    RUN(repair_from_ready_verifies_and_does_not_launch);
+    RUN(repair_failure_shows_error_then_recovers);
+    RUN(repair_ignored_outside_ready_and_error);
+    RUN(repair_dropped_when_status_cannot_install);
+    RUN(repair_wins_over_a_click_on_the_same_fetch);
+    RUN(play_install_is_not_a_repair);
     return test_report();
 }

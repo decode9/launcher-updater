@@ -30,7 +30,8 @@ int cache_has_blob(const uint8_t sha[SHA256_BYTES]);
  * size may be APP_SIZE_UNKNOWN. Worker thread only. Returns 1 if the blob is now cached. */
 int cache_fetch_blob(const uint8_t sha[SHA256_BYTES], uint64_t size);
 
-/* Writes a file at a native path through "<path>.part" + flush + atomic rename. */
+/* Writes a file at a native path through "<path>.part" + flush + atomic rename. Uses only the
+ * stack, so any thread may call it (two writers must not target the same path at once). */
 int cache_write_atomic(const char *path, const void *data, size_t len);
 
 /* Named documents ("theme.json", "status.json"). */

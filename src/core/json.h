@@ -69,6 +69,7 @@ int json_next(const json_doc *doc, int i);                      /* next sibling,
 
 /* Value readers: return 1 on success, 0 if the token is missing or of another kind. */
 int json_u64(const json_doc *doc, int i, uint64_t *out); /* non-negative integer, no . or e */
+int json_i64(const json_doc *doc, int i, int64_t *out);  /* integer, optional '-', no . or e */
 int json_bool(const json_doc *doc, int i, int *out);
 int json_is_null(const json_doc *doc, int i);
 

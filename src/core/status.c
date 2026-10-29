@@ -58,6 +58,14 @@ int utc_parse(const char *s, size_t len, int64_t *out)
     return 1;
 }
 
+int status_date_is_valid(const char *s, size_t len)
+{
+    int y, m, d;
+    if (len != 10 || s[4] != '-' || s[7] != '-') return 0;
+    if (!digits(s, 4, &y) || !digits(s + 5, 2, &m) || !digits(s + 8, 2, &d)) return 0;
+    return y >= 1970 && m >= 1 && m <= 12 && d >= 1 && d <= days_in_month(y, m);
+}
+
 static int read_time(const json_doc *doc, int i, int64_t *out)
 {
     char text[40];
@@ -104,6 +112,31 @@ static int pick_title(const json_doc *doc, int titles, const char *lang, char *o
     return json_string(doc, value, out, cap, 0);
 }
 
+/* category: 1..31 chars of [a-z0-9_-]. Anything else (wrong type, uppercase, too long) leaves
+ * it empty, like a bad link: the item still shows, it just matches no filter but "all". */
+static void read_category(const json_doc *doc, int i, char out[STATUS_CATEGORY_BYTES])
+{
+    size_t n, k;
+    if (i < 0 || !json_string(doc, i, out, STATUS_CATEGORY_BYTES, &n)) {
+        out[0] = 0;
+        return;
+    }
+    for (k = 0; k < n; k++) {
+        char c = out[k];
+        if (!((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_' || c == '-')) {
+            out[0] = 0;
+            return;
+        }
+    }
+}
+
+/* date: "YYYY-MM-DD"; anything else leaves it empty. */
+static void read_date(const json_doc *doc, int i, char out[STATUS_DATE_BYTES])
+{
+    size_t n;
+    if (i < 0 || !json_string(doc, i, out, STATUS_DATE_BYTES, &n) || !status_date_is_valid(out, n)) out[0] = 0;
+}
+
 static int read_news(const json_doc *doc, int item, const char *lang, status_news *news)
 {
     int image = json_get(doc, item, "image"), link = json_get(doc, item, "link");
@@ -118,6 +151,8 @@ static int read_news(const json_doc *doc, int item, const char *lang, status_new
     if (link >= 0 && (!json_string(doc, link, news->link, sizeof news->link, 0) ||
                       !config_https_url_is_valid(news->link)))
         news->link[0] = 0; /* a bad link only disables the click, not the whole status */
+    read_category(doc, json_get(doc, item, "category"), news->category);
+    read_date(doc, json_get(doc, item, "date"), news->date);
     return 1;
 }
 
@@ -192,7 +227,8 @@ int64_t status_seconds_to_open(const launcher_status *st)
 int status_news_item_equal(const status_news *a, const status_news *b)
 {
     return a->has_image == b->has_image && (!a->has_image || mem_eq(a->image, b->image, SHA256_BYTES)) &&
-           str_eq(a->title, b->title) && str_eq(a->link, b->link);
+           str_eq(a->title, b->title) && str_eq(a->link, b->link) && str_eq(a->category, b->category) &&
+           str_eq(a->date, b->date);
 }
 
 int status_news_equal(const status_news *a, uint32_t a_count, const status_news *b, uint32_t b_count)

@@ -20,6 +20,13 @@ typedef struct GpFontCollection GpFontCollection;
 typedef struct GpFontFamily GpFontFamily;
 typedef struct GpFont GpFont;
 typedef struct GpStringFormat GpStringFormat;
+typedef struct GpImageAttributes GpImageAttributes;
+typedef GpBrush GpLineGradient; /* a brush: GdipFillPath and GdipDeleteBrush take it as one */
+
+/* 5x5 row-vector colour transform: [r g b a 1] * m (row 4 adds offsets). */
+typedef struct {
+    float m[5][5];
+} GpColorMatrix;
 
 typedef struct {
     uint32_t GdiplusVersion;
@@ -49,6 +56,9 @@ typedef struct {
 #define GP_COMBINE_INTERSECT 1
 #define GP_PIXFMT_32BPP_PARGB 0x000E200B
 #define GP_MATRIX_ORDER_PREPEND 0
+#define GP_WRAP_TILE_FLIP_XY 3
+#define GP_COLOR_ADJUST_DEFAULT 0
+#define GP_COLOR_MATRIX_FLAGS_DEFAULT 0
 
 IMPORT GpStatus WINAPI GdiplusStartup(uintptr_t *, const GdiplusStartupInput *, void *);
 IMPORT void WINAPI GdiplusShutdown(uintptr_t);
@@ -75,6 +85,15 @@ IMPORT GpStatus WINAPI GdipSetClipRectI(GpGraphics *, int, int, int, int, int);
 IMPORT GpStatus WINAPI GdipResetClip(GpGraphics *);
 IMPORT GpStatus WINAPI GdipScaleWorldTransform(GpGraphics *, float, float, int);
 IMPORT GpStatus WINAPI GdipDrawImageRectI(GpGraphics *, GpImage *, int, int, int, int);
+IMPORT GpStatus WINAPI GdipDrawImageRectRectI(GpGraphics *, GpImage *, int, int, int, int, int, int, int, int, int,
+                                              const GpImageAttributes *, void *, void *);
+IMPORT GpStatus WINAPI GdipCreateImageAttributes(GpImageAttributes **);
+IMPORT GpStatus WINAPI GdipSetImageAttributesColorMatrix(GpImageAttributes *, int, BOOL, const GpColorMatrix *,
+                                                         const GpColorMatrix *, int);
+IMPORT GpStatus WINAPI GdipDisposeImageAttributes(GpImageAttributes *);
+IMPORT GpStatus WINAPI GdipCreateLineBrushFromRectWithAngle(const GpRectF *, ARGB, ARGB, float, BOOL, int,
+                                                            GpLineGradient **);
+IMPORT GpStatus WINAPI GdipSetLinePresetBlend(GpLineGradient *, const ARGB *, const float *, int);
 IMPORT GpStatus WINAPI GdipCreateBitmapFromStream(IStream *, GpImage **);
 IMPORT GpStatus WINAPI GdipCreateBitmapFromScan0(int, int, int, int, uint8_t *, GpImage **);
 IMPORT GpStatus WINAPI GdipGetImageGraphicsContext(GpImage *, GpGraphics **);

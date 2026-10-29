@@ -452,9 +452,169 @@ static void check_example_file(const char *rel, uint32_t want_types)
     CHECK(theme_title(&th, "es")[0] && theme_title(&th, "en")[0]);
 }
 
+TEST(window_transparent)
+{
+    CHECK(parse("{\"schema_version\":1}") == THEME_OK);
+    CHECK_EQ_U64(th.transparent, 0);
+    CHECK(parse("{\"schema_version\":1,\"window\":{\"transparent\":true}}") == THEME_OK);
+    CHECK_EQ_U64(th.transparent, 1);
+    CHECK(parse("{\"schema_version\":1,\"window\":{\"transparent\":1}}") == THEME_OK);
+    CHECK_EQ_U64(th.transparent, 0); /* not a boolean: ignored */
+}
+
+TEST(style_gradient_and_image_adjust)
+{
+    const theme_element *e;
+    const theme_style *n, *h, *p, *d;
+    CHECK(parse("{\"schema_version\":1,\"tokens\":{\"a\":\"#010203\"},\"elements\":["
+                "{\"type\":\"text\",\"rect\":[0,0,10,10]},"
+                "{\"type\":\"button\",\"rect\":[0,0,10,10],\"action\":\"play\",\"style\":{"
+                "\"normal\":{\"gradient\":{\"colors\":[\"a\",\"#FFFFFF80\",\"#000000\"],\"angle\":0},\"brightness\":-40,\"opacity\":70},"
+                "\"hover\":{\"brightness\":25},"
+                "\"pressed\":{\"gradient\":null,\"opacity\":0},"
+                "\"disabled\":{\"gradient\":{\"colors\":[\"#FF0000\",\"#00FF00\"]}}}}]}") == THEME_OK);
+    CHECK_EQ_U64(th.warnings, 0);
+    /* Defaults: no gradient, brightness 0, opacity 100. */
+    n = theme_element_style(el(0), THEME_ST_NORMAL);
+    CHECK_EQ_U64(n->gradient.count, 0);
+    CHECK_EQ_U64(n->brightness, 0);
+    CHECK_EQ_U64(n->opacity, 100);
+
+    e = el(1);
+    n = theme_element_style(e, THEME_ST_NORMAL);
+    h = theme_element_style(e, THEME_ST_HOVER);
+    p = theme_element_style(e, THEME_ST_PRESSED);
+    d = theme_element_style(e, THEME_ST_DISABLED);
+    CHECK_EQ_U64(n->gradient.count, 3);
+    CHECK_EQ_U64(n->gradient.colors[0], 0x010203FF);
+    CHECK_EQ_U64(n->gradient.colors[1], 0xFFFFFF80);
+    CHECK_EQ_U64(n->gradient.colors[2], 0x000000FF);
+    CHECK_EQ_U64(n->gradient.angle, 0);
+    CHECK(n->brightness == -40);
+    CHECK_EQ_U64(n->opacity, 70);
+    /* hover inherits the gradient and opacity, overrides brightness. */
+    CHECK(memcmp(&h->gradient, &n->gradient, sizeof n->gradient) == 0);
+    CHECK(h->brightness == 25);
+    CHECK_EQ_U64(h->opacity, 70);
+    /* null removes the inherited gradient. */
+    CHECK_EQ_U64(p->gradient.count, 0);
+    CHECK(p->brightness == -40);
+    CHECK_EQ_U64(p->opacity, 0);
+    /* A new gradient replaces the inherited one as a whole: its angle is the default. */
+    CHECK_EQ_U64(d->gradient.count, 2);
+    CHECK_EQ_U64(d->gradient.colors[1], 0x00FF00FF);
+    CHECK_EQ_U64(d->gradient.angle, THEME_GRADIENT_ANGLE);
+
+    /* Invalid values keep what was inherited. */
+    CHECK(parse("{\"schema_version\":1,\"elements\":[{\"type\":\"text\",\"rect\":[0,0,10,10],\"style\":{"
+                "\"normal\":{\"gradient\":{\"colors\":[\"#FF0000\",\"#00FF00\"],\"angle\":45}},"
+                "\"hover\":{\"gradient\":{\"colors\":[\"#FF0000\"]},\"brightness\":101,\"opacity\":101},"
+                "\"pressed\":{\"gradient\":{\"colors\":[\"#1\",\"#2\",\"#3\",\"#4\",\"#5\"]},\"brightness\":-101},"
+                "\"disabled\":{\"gradient\":{\"colors\":[\"#FF0000\",\"nope\"],\"angle\":360},\"opacity\":-1}}}]}") == THEME_OK);
+    e = el(0);
+    n = theme_element_style(e, THEME_ST_NORMAL);
+    CHECK_EQ_U64(n->gradient.angle, 45);
+    CHECK(memcmp(&theme_element_style(e, THEME_ST_HOVER)->gradient, &n->gradient, sizeof n->gradient) == 0);
+    CHECK(memcmp(&theme_element_style(e, THEME_ST_PRESSED)->gradient, &n->gradient, sizeof n->gradient) == 0);
+    CHECK(memcmp(&theme_element_style(e, THEME_ST_DISABLED)->gradient, &n->gradient, sizeof n->gradient) == 0);
+    CHECK(theme_element_style(e, THEME_ST_HOVER)->brightness == 0);
+    CHECK_EQ_U64(theme_element_style(e, THEME_ST_HOVER)->opacity, 100);
+    CHECK(theme_element_style(e, THEME_ST_PRESSED)->brightness == 0);
+    CHECK_EQ_U64(theme_element_style(e, THEME_ST_DISABLED)->opacity, 100);
+    CHECK(th.warnings == (THEME_WARN_BAD_VALUE | THEME_WARN_BAD_COLOR));
+}
+
+TEST(selected_state)
+{
+    const theme_element *e;
+    CHECK(THEME_ST_NORMAL == 0 && THEME_ST_HOVER == 1 && THEME_ST_PRESSED == 2 && THEME_ST_DISABLED == 3);
+    CHECK(THEME_ST_SELECTED == 4 && THEME_ST_COUNT == 5);
+    CHECK(parse("{\"schema_version\":1,\"elements\":["
+                "{\"type\":\"button\",\"rect\":[0,0,10,10],\"action\":\"filter\",\"category\":\"\","
+                "\"style\":{\"normal\":{\"fill\":\"#111111\",\"radius\":4},\"selected\":{\"fill\":\"#222222\"}}},"
+                "{\"type\":\"button\",\"rect\":[0,0,10,10],\"action\":\"exit\",\"style\":{\"normal\":{\"fill\":\"#111111\"}}}]}") == THEME_OK);
+    e = el(0);
+    CHECK_EQ_U64(theme_element_style(e, THEME_ST_SELECTED)->fill, 0x222222FF);
+    CHECK_EQ_U64(theme_element_style(e, THEME_ST_SELECTED)->radius, 4); /* inherited from normal */
+    e = el(1);
+    CHECK(memcmp(theme_element_style(e, THEME_ST_SELECTED), theme_element_style(e, THEME_ST_NORMAL), sizeof(theme_style)) == 0);
+}
+
+TEST(new_actions)
+{
+    CHECK(parse("{\"schema_version\":1,\"elements\":["
+                "{\"type\":\"button\",\"rect\":[0,0,10,10],\"action\":\"filter\",\"category\":\"events\"},"
+                "{\"type\":\"button\",\"rect\":[0,0,10,10],\"action\":\"filter\",\"category\":\"\"},"
+                "{\"type\":\"button\",\"rect\":[0,0,10,10],\"action\":\"language\"},"
+                "{\"type\":\"button\",\"rect\":[0,0,10,10],\"action\":\"options\"},"
+                "{\"type\":\"button\",\"rect\":[0,0,10,10],\"action\":\"filter\"},"
+                "{\"type\":\"button\",\"rect\":[0,0,10,10],\"action\":\"filter\",\"category\":3},"
+                "{\"type\":\"button\",\"rect\":[0,0,10,10],\"action\":\"filter\",\"category\":\"0123456789012345678901234567890\"},"
+                "{\"type\":\"button\",\"rect\":[0,0,10,10],\"action\":\"filter\",\"category\":\"01234567890123456789012345678901\"},"
+                "{\"type\":\"button\",\"rect\":[0,0,10,10],\"action\":\"rewind\"}]}") == THEME_OK);
+    CHECK_EQ_U64(theme_element_count(&th), 5);
+    CHECK_EQ_U64(el(0)->action, THEME_ACT_FILTER);
+    CHECK_STR(theme_str(&th, el(0)->category), "events");
+    CHECK_EQ_U64(el(1)->action, THEME_ACT_FILTER);
+    CHECK_EQ_U64(el(1)->category, 0); /* "" = all news */
+    CHECK_EQ_U64(el(2)->action, THEME_ACT_LANGUAGE);
+    CHECK_EQ_U64(el(3)->action, THEME_ACT_OPTIONS);
+    CHECK_STR(theme_str(&th, el(4)->category), "0123456789012345678901234567890"); /* 31 bytes: fits */
+    CHECK_EQ_U64(th.skipped_elements, 4); /* missing, not a string, 32 bytes, unknown action */
+    CHECK(th.warnings & THEME_WARN_BAD_ELEMENT);
+}
+
+TEST(news_list)
+{
+    const theme_element *e;
+    CHECK(parse("{\"schema_version\":1,\"tokens\":{\"text\":\"#EEEEEE\"},"
+                "\"fonts\":{\"body\":{\"family\":\"X\"},\"small\":{\"family\":\"Y\",\"size\":10}},\"elements\":["
+                "{\"type\":\"news_list\",\"rect\":[0,0,300,200]},"
+                "{\"type\":\"news_list\",\"rect\":[0,0,300,200],\"row_height\":32,\"tag_width\":90,\"date_width\":60,"
+                "\"gap\":8,\"date_format\":\"{dd}/{mm}\",\"color\":\"#CCCCCC\",\"style\":{\"normal\":{\"radius\":3},\"hover\":{\"fill\":\"#FFFFFF20\"}},"
+                "\"tag_style\":{\"fill\":\"#C89B3C\",\"color\":\"#101418\",\"border\":\"#FFFFFF\",\"border_width\":1,\"font\":\"small\"}},"
+                "{\"type\":\"news_list\",\"rect\":[0,0,300,200],\"row_height\":7,\"tag_width\":1025,\"date_width\":2000,\"gap\":257,\"date_format\":5}]}") == THEME_OK);
+    CHECK_EQ_U64(theme_element_count(&th), 3);
+    e = el(0);
+    CHECK_EQ_U64(e->type, THEME_EL_NEWS_LIST);
+    CHECK_EQ_U64(e->align, THEME_ALIGN_LEFT);
+    CHECK_EQ_U64(e->row_height, 40);
+    CHECK_EQ_U64(e->tag_width, 0);
+    CHECK_EQ_U64(e->date_width, 0);
+    CHECK_EQ_U64(e->gap, 12);
+    CHECK_STR(theme_str(&th, e->date_format), THEME_DATE_FORMAT);
+    CHECK(memcmp(&e->tag_style, theme_element_style(e, THEME_ST_NORMAL), sizeof(theme_style)) == 0);
+
+    e = el(1);
+    CHECK_EQ_U64(e->row_height, 32);
+    CHECK_EQ_U64(e->tag_width, 90);
+    CHECK_EQ_U64(e->date_width, 60);
+    CHECK_EQ_U64(e->gap, 8);
+    CHECK_STR(theme_str(&th, e->date_format), "{dd}/{mm}");
+    CHECK_EQ_U64(theme_element_style(e, THEME_ST_HOVER)->fill, 0xFFFFFF20);
+    CHECK_EQ_U64(e->tag_style.fill, 0xC89B3CFF);
+    CHECK_EQ_U64(e->tag_style.color, 0x101418FF);
+    CHECK_EQ_U64(e->tag_style.border, 0xFFFFFFFF);
+    CHECK_EQ_U64(e->tag_style.border_width, 1);
+    CHECK(e->tag_style.font == 1);
+    CHECK_EQ_U64(e->tag_style.radius, 3); /* inherited from the element's normal style */
+    CHECK_EQ_U64(theme_element_style(e, THEME_ST_NORMAL)->color, 0xCCCCCCFF);
+    CHECK_EQ_U64(th.warnings, 0 | THEME_WARN_BAD_VALUE); /* only from element 2 */
+
+    /* Out of range: every field falls back to its default; the element is kept. */
+    e = el(2);
+    CHECK_EQ_U64(e->row_height, 40);
+    CHECK_EQ_U64(e->tag_width, 0);
+    CHECK_EQ_U64(e->date_width, 0);
+    CHECK_EQ_U64(e->gap, 12);
+    CHECK_STR(theme_str(&th, e->date_format), THEME_DATE_FORMAT);
+    CHECK_EQ_U64(th.skipped_elements, 0);
+}
+
 TEST(examples)
 {
-    const uint32_t all = (1u << THEME_EL_TYPE_COUNT) - 1;
+    /* news_list is not used by the shipped examples yet. */
+    const uint32_t all = ((1u << THEME_EL_TYPE_COUNT) - 1) & ~(1u << THEME_EL_NEWS_LIST);
     /* The neutral theme is colours only, so it has every type but image. */
     check_example_file("examples/theme-neutral/theme.json", all & ~(1u << THEME_EL_IMAGE));
     CHECK_EQ_U64(theme_required_blobs(&th, 0, 0), 0); /* the embedded theme needs no download */
@@ -474,6 +634,11 @@ int main(void)
     RUN(versions_and_errors);
     RUN(limits);
     RUN(required_blobs);
+    RUN(window_transparent);
+    RUN(style_gradient_and_image_adjust);
+    RUN(selected_state);
+    RUN(new_actions);
+    RUN(news_list);
     RUN(examples);
     return test_report();
 }

@@ -200,7 +200,7 @@ static char text[16384];
 static json_token tokens[4096];
 static release_manifest manifest;
 static install_result result;
-static const install_ctx ctx = {&posix_fs, &mem_net, 0, 0, 0, "launcher.exe"};
+static const install_ctx ctx = {&posix_fs, &mem_net, 0, 0, 0, "launcher.exe", 0};
 
 static void hex(const uint8_t *sha, char out[65]) { hex_encode(sha, 32, out); }
 
@@ -592,6 +592,60 @@ TEST(existing_files_are_hashed_once_and_kept)
     CHECK(file_has("cfg.ini", (const uint8_t *)"a=1\nServer=A.example\r\n", 22));
 }
 
+/* Flips one byte in place: same size, so only a full hash notices. */
+static void corrupt_byte(const char *path, long offset)
+{
+    char n[600];
+    FILE *f;
+    int c;
+    native(n, path);
+    f = fopen(n, "r+b");
+    CHECK(f != 0);
+    if (!f) return;
+    fseek(f, offset, SEEK_SET);
+    c = fgetc(f);
+    fseek(f, offset, SEEK_SET);
+    fputc(c ^ 0x5a, f);
+    fclose(f);
+}
+
+TEST(force_verify_repairs_a_file_the_state_calls_fine)
+{
+    static const install_ctx repair = {&posix_fs, &mem_net, 0, 0, 0, "launcher.exe", 1};
+    fresh_root();
+    make_manifest('A', 0);
+    CHECK(install_run(&ctx, &manifest, &result) == INSTALL_OK);
+    corrupt_byte("data/big.pak", 1234);
+    /* Without the option: fast path, the damage goes unnoticed (unchanged behaviour). */
+    CHECK(install_run(&ctx, &manifest, &result) == INSTALL_OK);
+    CHECK(result.fast_path);
+    CHECK(!file_has("data/big.pak", big_a, sizeof big_a));
+    /* With it: every file is hashed and the damaged one downloaded again. */
+    CHECK(install_run(&repair, &manifest, &result) == INSTALL_OK);
+    CHECK(!result.fast_path);
+    CHECK_EQ_U64(result.downloaded, 3500);
+    CHECK(file_has("data/big.pak", big_a, sizeof big_a));
+    CHECK(install_is_current(&ctx, "rel-A"));
+    /* An intact install is only hashed: nothing downloaded. */
+    CHECK(install_run(&repair, &manifest, &result) == INSTALL_OK);
+    CHECK(!result.fast_path);
+    CHECK_EQ_U64(result.downloaded, 0);
+}
+
+TEST(force_verify_repairs_a_patched_file)
+{
+    static const install_ctx repair = {&posix_fs, &mem_net, 0, 0, 0, "launcher.exe", 1};
+    fresh_root();
+    make_manifest('A', 1);
+    CHECK(install_run(&ctx, &manifest, &result) == INSTALL_OK);
+    corrupt_byte("data/big.pak", 100); /* outside the patch writes: undoing it cannot fix this */
+    CHECK(install_run(&ctx, &manifest, &result) == INSTALL_OK);
+    CHECK(result.fast_path);
+    CHECK(install_run(&repair, &manifest, &result) == INSTALL_OK);
+    CHECK(!result.fast_path);
+    check_release_a();
+}
+
 TEST(not_enough_space)
 {
     make_manifest('A', 1);
@@ -921,6 +975,8 @@ int main(void)
     RUN(corrupt_chunk_fails_and_no_final_file);
     RUN(release_a_to_b_goes_through_the_base);
     RUN(existing_files_are_hashed_once_and_kept);
+    RUN(force_verify_repairs_a_file_the_state_calls_fine);
+    RUN(force_verify_repairs_a_patched_file);
     RUN(not_enough_space);
     RUN(cancel_keeps_progress);
     RUN(orphans_keep_state_within_capacity);

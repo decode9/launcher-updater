@@ -28,7 +28,8 @@ extern char app_exe_name[FS_PATH_BYTES]; /* file name of the running executable 
 extern launcher_config app_config;
 extern launcher_status app_status;
 
-/* Finds the launcher folder, opens launcher.log and writes "launcher <version> <mode>".
+/* Finds the launcher folder, opens launcher.log, loads prefs.json (app/prefs.h) and writes
+ * "launcher <version> <mode>".
  * Returns 0 if the folder is unknown (nothing can work then). */
 int app_begin(const char *mode);
 void app_end(void);
@@ -55,8 +56,14 @@ int app_quitting(void);
 int app_fetch_status(void);
 const char *app_status_text(size_t *len);
 
-/* Parses a cached status document into app_status (not logged). */
+/* Parses a cached status document into app_status (not logged). text must stay unchanged
+ * while it is the last document parsed (app_reparse_status reads it again). */
 int app_parse_status(const char *text, size_t len);
+
+/* Parses the last document app_fetch_status or app_parse_status accepted again, in the current
+ * language (prefs_language), so news titles follow a language change. Returns 0 if there is
+ * none (nothing fetched yet, or the last fetch failed after overwriting it). */
+int app_reparse_status(void);
 
 /* Executable name and install ports (core/install.h), once. */
 int app_ports_init(void);
@@ -72,10 +79,18 @@ int app_release_is_current(void);
 int app_install_interrupted(void); /* an install started and did not finish */
 
 /* Installs app_status.release (manifest, then the engine), logging. progress may be 0.
- * Returns 0 installed or already current, 1 configuration error, 2 network/server error,
- * 3 install error (*result holds the details when not 0). */
-int app_install_release(install_progress_fn progress, void *user, volatile const int *cancel,
+ * repair: hash every file and download again whatever does not match (install_ctx.force_verify),
+ * even when state.json says the release is installed. Returns 0 installed or already current,
+ * 1 configuration error, 2 network/server error, 3 install error (*result holds the details
+ * when not 0). */
+int app_install_release(install_progress_fn progress, void *user, volatile const int *cancel, int repair,
                         install_result **result);
+
+/* The window's language menu (window.c), UI thread only: chooses lang (core/prefs.h
+ * prefs_lang_valid, or "" for the Windows language), shows the theme texts and title in it at
+ * once and asks the worker to save prefs.json and resend the news in it. Returns 0, changing
+ * nothing, if lang is not valid. */
+int window_set_language(const char *lang);
 
 /* Logs install progress (each phase/file change and about every eighth of a download). */
 void app_log_progress(const install_progress *p);

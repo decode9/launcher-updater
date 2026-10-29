@@ -147,6 +147,66 @@ TEST(errors)
     CHECK(parse("[1]", 0) == STATUS_ERR_JSON);
 }
 
+TEST(news_category_and_date)
+{
+    CHECK(parse("{\"schema\": 1, \"server_time\": \"2026-11-12T00:00:00Z\", \"open\": true, " BLOBS ", \"news\": ["
+                "{\"title\": \"a\", \"category\": \"updates\", \"date\": \"2026-10-28\"},"
+                "{\"title\": \"b\", \"category\": \"patch_notes-2\", \"date\": \"2024-02-29\"},"
+                "{\"title\": \"c\"},"
+                "{\"title\": \"d\", \"category\": \"Updates\", \"date\": \"2026-02-29\"},"
+                "{\"title\": \"e\", \"category\": \"\", \"date\": \"2026-10-28T00:00:00Z\"},"
+                "{\"title\": \"f\", \"category\": \"has space\", \"date\": \"26-10-28\"},"
+                "{\"title\": \"g\", \"category\": \"abcdefghijabcdefghijabcdefghij1\", \"date\": \"1969-12-31\"},"
+                "{\"title\": \"h\", \"category\": \"abcdefghijabcdefghijabcdefghij12\", \"date\": \"2026-13-01\"},"
+                "{\"title\": \"i\", \"category\": 7, \"date\": 20261028},"
+                "{\"title\": \"j\", \"category\": null, \"date\": null},"
+                "{\"title\": \"k\", \"category\": \"caf\u00e9\", \"date\": \"2026-1O-28\"}]}",
+                0) == STATUS_OK);
+    CHECK_EQ_U64(st.news_count, 11);
+    CHECK_STR(st.news[0].category, "updates");
+    CHECK_STR(st.news[0].date, "2026-10-28");
+    CHECK_STR(st.news[1].category, "patch_notes-2");
+    CHECK_STR(st.news[1].date, "2024-02-29");          /* leap day */
+    CHECK_STR(st.news[2].category, "");                 /* absent */
+    CHECK_STR(st.news[2].date, "");
+    CHECK_STR(st.news[3].category, "");                 /* uppercase */
+    CHECK_STR(st.news[3].date, "");                     /* not a leap year */
+    CHECK_STR(st.news[4].category, "");
+    CHECK_STR(st.news[4].date, "");                     /* a time, not a date */
+    CHECK_STR(st.news[5].category, "");
+    CHECK_STR(st.news[5].date, "");
+    CHECK_STR(st.news[6].category, "abcdefghijabcdefghijabcdefghij1"); /* 31 bytes: the limit */
+    CHECK_STR(st.news[6].date, "");                     /* before 1970 */
+    CHECK_STR(st.news[7].category, "");                 /* 32 bytes: too long */
+    CHECK_STR(st.news[7].date, "");
+    CHECK_STR(st.news[8].category, "");                 /* wrong types */
+    CHECK_STR(st.news[8].date, "");
+    CHECK_STR(st.news[9].category, "");
+    CHECK_STR(st.news[9].date, "");
+    CHECK_STR(st.news[10].category, "");                /* non-ASCII */
+    CHECK_STR(st.news[10].date, "");
+    CHECK_STR(st.news[10].title, "k");                  /* the item itself still shows */
+    /* reset by every parse */
+    CHECK(parse("{\"schema\": 1, \"server_time\": \"2026-11-12T00:00:00Z\", \"open\": true, " BLOBS
+                ", \"news\": [{\"title\": \"a\"}]}", 0) == STATUS_OK);
+    CHECK_STR(st.news[0].category, "");
+    CHECK_STR(st.news[0].date, "");
+}
+
+TEST(date_valid)
+{
+    CHECK(status_date_is_valid("2026-10-28", 10));
+    CHECK(status_date_is_valid("1970-01-01", 10));
+    CHECK(status_date_is_valid("2000-02-29", 10));
+    CHECK(!status_date_is_valid("1900-02-29", 10));
+    CHECK(!status_date_is_valid("2026-04-31", 10));
+    CHECK(!status_date_is_valid("2026-00-10", 10));
+    CHECK(!status_date_is_valid("2026-10-00", 10));
+    CHECK(!status_date_is_valid("2026/10/28", 10));
+    CHECK(!status_date_is_valid("2026-10-28", 9));
+    CHECK(!status_date_is_valid("", 0));
+}
+
 static status_news news_item(const char *title, int image_byte)
 {
     status_news n;
@@ -178,6 +238,12 @@ TEST(news_equal)
     CHECK(!status_news_equal(a, 2, b, 2));
     b[1] = a[1];
     strcpy(b[1].title, "deux");
+    CHECK(!status_news_equal(a, 2, b, 2));
+    b[1] = a[1];
+    strcpy(b[1].category, "events");
+    CHECK(!status_news_equal(a, 2, b, 2));
+    b[1] = a[1];
+    strcpy(b[1].date, "2026-10-28");
     CHECK(!status_news_equal(a, 2, b, 2));
     b[1] = a[1];
     a[1].image[0] = 7; /* ignored without has_image */
@@ -212,6 +278,8 @@ int main(void)
     RUN(minimal_and_open);
     RUN(no_release);
     RUN(news_details);
+    RUN(news_category_and_date);
+    RUN(date_valid);
     RUN(errors);
     RUN(news_equal);
     RUN(news_keep_index);

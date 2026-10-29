@@ -25,6 +25,12 @@ EXPORTS
     GdipResetClip@4
     GdipScaleWorldTransform@16
     GdipDrawImageRectI@24
+    GdipDrawImageRectRectI@56
+    GdipCreateImageAttributes@4
+    GdipSetImageAttributesColorMatrix@24
+    GdipDisposeImageAttributes@4
+    GdipCreateLineBrushFromRectWithAngle@28
+    GdipSetLinePresetBlend@16
     GdipCreateBitmapFromStream@8
     GdipCreateBitmapFromScan0@24
     GdipGetImageGraphicsContext@8
