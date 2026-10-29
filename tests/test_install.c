@@ -116,6 +116,14 @@ static int p_remove(void *u, const char *path)
     native(n, path);
     return unlink(n) == 0 || errno == ENOENT;
 }
+static int p_remove_dir(void *u, const char *path)
+{
+    char n[600];
+    (void)u;
+    if (!alive_op()) return 0;
+    native(n, path);
+    return rmdir(n) == 0;
+}
 static int p_free(void *u, uint64_t *bytes)
 {
     (void)u;
@@ -134,7 +142,7 @@ static install_probe_result p_probe(void *u, const char *path)
 }
 
 static const install_fs posix_fs = {0, p_open, p_read, p_write, p_seek, p_size, p_truncate, p_flush, p_close,
-                                    p_rename, p_make_parents, p_remove, p_free, p_probe};
+                                    p_rename, p_make_parents, p_remove, p_free, p_probe, p_remove_dir};
 
 /* ---- in-memory blob store ---- */
 
@@ -284,6 +292,14 @@ static int exists(const char *path)
     char n[600];
     native(n, path);
     return access(n, F_OK) == 0;
+}
+
+static int is_file(const char *path)
+{
+    char n[600];
+    struct stat st;
+    native(n, path);
+    return stat(n, &st) == 0 && S_ISREG(st.st_mode);
 }
 
 static void write_file(const char *path, const void *data, size_t size)
@@ -733,9 +749,52 @@ TEST(orphan_line_edit_of_user_file_is_kept)
     make_many("r2", 'a', 1, "");
     CHECK(install_run(&ctx, &manifest, &result) == INSTALL_OK);
     CHECK(file_has("cfg/settings.ini", (const uint8_t *)"a=0\r\nK=1\r\n", 10));
-    CHECK(!exists("cfg/settings.ini.part")); /* the launcher's own temporary */
+    CHECK(exists("cfg/settings.ini.part")); /* line ops never write a .part: not the launcher's */
     CHECK(state_count("settings.ini") == 0);
     CHECK(exists("a/0"));
+}
+
+/* A download cut half way, then a release without that path: its .part (and the folder it
+ * leaves empty) is deleted although the file was never complete. */
+TEST(orphan_unfinished_download_is_deleted)
+{
+    fresh_root();
+    make_manifest('A', 1);
+    fetches_left = 0;
+    CHECK(install_run(&ctx, &manifest, &result) != INSTALL_OK);
+    dead = 0;
+    fetches_left = -1;
+    CHECK(exists("data/big.pak.part") && !exists("data/big.pak"));
+    write_file("cfg.ini.part", "mine", 4); /* cfg.ini is only edited (line op) */
+    make_many("r2", 'b', 1, "");
+    CHECK(install_run(&ctx, &manifest, &result) == INSTALL_OK);
+    CHECK(!exists("data/big.pak.part") && !exists("data"));
+    CHECK(file_has("cfg.ini.part", (const uint8_t *)"mine", 4));
+    CHECK(state_count("big.pak") == 0);
+}
+
+/* A managed file inside a folder (a/0), then a release with a file where that folder was (a):
+ * the emptied folder is removed so the new file can take its name. A folder that still holds
+ * a user's file is kept, and the install fails without touching it. */
+TEST(orphan_folder_becomes_file)
+{
+    char e[65], extra[200];
+    hex(sha_empty, e);
+    snprintf(extra, sizeof extra, "{\"op\":\"file\",\"path\":\"a\",\"sha256\":\"%s\",\"size\":0,\"chunks\":[]}", e);
+    fresh_root();
+    make_many("r1", 'a', 1, "");
+    CHECK(install_run(&ctx, &manifest, &result) == INSTALL_OK);
+    make_many("r2", 'a', 0, extra);
+    CHECK(install_run(&ctx, &manifest, &result) == INSTALL_OK);
+    CHECK(is_file("a"));
+
+    fresh_root();
+    make_many("r1", 'a', 1, "");
+    CHECK(install_run(&ctx, &manifest, &result) == INSTALL_OK);
+    write_file("a/user.sav", "save", 4);
+    make_many("r2", 'a', 0, extra);
+    CHECK(install_run(&ctx, &manifest, &result) == INSTALL_ERR_IO);
+    CHECK(file_has("a/user.sav", (const uint8_t *)"save", 4) && !exists("a/0"));
 }
 
 /* Delivered whole by a file op, then edited by a line op (r1) or a patch (A, B): still the
@@ -868,6 +927,8 @@ int main(void)
     RUN(orphans_deleted_user_files_kept);
     RUN(crash_while_deleting_orphans_recovers);
     RUN(orphan_line_edit_of_user_file_is_kept);
+    RUN(orphan_unfinished_download_is_deleted);
+    RUN(orphan_folder_becomes_file);
     RUN(orphan_delivered_then_edited_is_deleted);
     RUN(orphans_of_legacy_state_are_only_forgotten);
     RUN(state_owned_round_trip);

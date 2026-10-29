@@ -201,6 +201,11 @@ int fs_remove(const char *path)
     return clear_readonly_after_denied(wide_a) && DeleteFileW(wide_a);
 }
 
+int fs_remove_empty_dir(const char *path)
+{
+    return widen(path, wide_a, WIDE_CHARS) && RemoveDirectoryW(wide_a);
+}
+
 int fs_free_space(const char *dir, uint64_t *bytes)
 {
     LONGLONG available;

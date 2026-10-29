@@ -96,6 +96,12 @@ static int p_remove(void *user, const char *path)
     return native(native_a, path) && fs_remove(native_a);
 }
 
+static int p_remove_dir(void *user, const char *path)
+{
+    (void)user;
+    return native(native_a, path) && fs_remove_empty_dir(native_a);
+}
+
 static int p_free_space(void *user, uint64_t *bytes)
 {
     (void)user;
@@ -159,7 +165,7 @@ int install_port_fetch_whole(const uint8_t sha256[SHA256_BYTES], install_sink si
 int install_port_init(const char *root, const launcher_config *cfg, install_fs *fs, install_net *net)
 {
     static const install_fs files = {0, p_open, p_read, p_write, p_seek, p_size, p_truncate, p_flush, p_close,
-                                     p_rename, p_make_parents, p_remove, p_free_space, p_probe};
+                                     p_rename, p_make_parents, p_remove, p_free_space, p_probe, p_remove_dir};
     unsigned port = cfg->port;
     if (!str_copy(root_dir, sizeof root_dir, root)) return 0;
     blob_host[0] = 0;

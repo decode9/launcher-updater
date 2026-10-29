@@ -30,7 +30,9 @@ heading matches the tag as the GitHub Release notes.
 
 - A release that renames many files no longer fails with a full state: files of the previous
   release that the new one does not mention are deleted at the start of the install. Only files
-  the launcher delivered whole (`file` ops) are deleted; files it only edited are kept.
+  the launcher delivered whole (`file` ops) are deleted; files it only edited are kept. The
+  `.part` of a download that never finished is deleted too, and folders left empty are removed,
+  so a later release can put a file where a folder was.
 - A launcher refused by the single-instance lock can still write to `launcher.log`.
 - A `state.json` that exists but cannot be read (held by an antivirus) stops the install without
   writing anything, instead of being replaced by an empty state; a corrupt one is kept as

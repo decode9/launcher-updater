@@ -66,6 +66,7 @@ IMPORT BOOL WINAPI SetEndOfFile(HANDLE);
 IMPORT BOOL WINAPI MoveFileExW(const wchar_t *, const wchar_t *, DWORD);
 IMPORT BOOL WINAPI CreateDirectoryW(const wchar_t *, void *);
 IMPORT BOOL WINAPI DeleteFileW(const wchar_t *);
+IMPORT BOOL WINAPI RemoveDirectoryW(const wchar_t *);
 IMPORT DWORD WINAPI GetFileAttributesW(const wchar_t *);
 IMPORT BOOL WINAPI SetFileAttributesW(const wchar_t *, DWORD);
 IMPORT BOOL WINAPI GetDiskFreeSpaceExW(const wchar_t *, LONGLONG *, LONGLONG *, LONGLONG *);

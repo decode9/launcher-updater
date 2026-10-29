@@ -12,6 +12,8 @@
  *   deleted once no release mentions it. Absent (false) for files the launcher only edited
  *   (`patch`/`line` on a file it did not deliver, e.g. the user's settings) and in state files
  *   written before the field existed: those are only ever forgotten, never deleted.
+ *   pending: sha256 all zero (size 0, owned): a `file` op whose download has not finished. The
+ *   launcher may hold "<path>.part"; whatever is at path is not its content yet.
  * journals: paths that have a patch journal (.launcher/j-<id>.jnl, journal.h). Each one is undone
  *   (back to the patch base) before the next install.
  * Pure model and (de)serialisation; install.c does the file I/O. Large: use static storage.
@@ -64,6 +66,9 @@ int state_matches(const install_state *s, const char *path, const uint8_t sha256
 int state_set(install_state *s, const char *path, const uint8_t sha256[SHA256_BYTES], uint64_t size);
 int state_set_owned(install_state *s, const char *path, const uint8_t sha256[SHA256_BYTES], uint64_t size, int owned);
 void state_forget(install_state *s, const char *path);
+/* Marks path as a download under way (see pending above); 0 if full. */
+int state_set_pending(install_state *s, const char *path);
+int state_is_pending(const state_file *f);
 
 int state_has_journal(const install_state *s, const char *path);
 int state_add_journal(install_state *s, const char *path); /* 0 if full; no duplicates */

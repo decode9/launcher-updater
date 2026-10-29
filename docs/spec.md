@@ -109,17 +109,21 @@ from `launcher.json`.
   (even if a later `patch` or `line` op edited it) whose path the new manifest does not mention,
   together with its `<path>.part`, and then forgets it. Files the launcher only edited with a
   `patch` or `line` op, without ever delivering them with a `file` op (e.g. a settings file the
-  game created), are only forgotten (their `<path>.part` is still deleted); files the launcher
+  game created), are only forgotten, and so is a `<path>.part` next to them; files the launcher
   never touched (saves, mods, user settings) are never deleted either. A delivered file whose
-  size changed since the launcher wrote it is only forgotten, not deleted. Deleting comes before
-  forgetting, so an interrupted run repeats it.
+  size changed since the launcher wrote it is only forgotten, not deleted. A download that never
+  finished is recorded before it starts, so its `<path>.part` is deleted too when a later
+  release drops the path. Folders left empty by these deletions are removed (a later release
+  may put a file where one was); a folder that still holds anything is kept. Deleting comes
+  before forgetting, so an interrupted run repeats it.
 - **Journal**: before appending, the base size is saved; before each in-place write, the old
   bytes (flushed to disk). On start, the journal of a half-finished install is undone first.
   Undo = truncate to the base size, then restore the old bytes in reverse order (idempotent).
 - **Launcher state** (informative, not part of the wire contract): `.launcher/state.json` holds
   the installed release and the SHA-256/size of each managed file; a file whose entry matches
   and whose size on disk is unchanged is not hashed again. An entry carries `"owned": true` when
-  a `file` op delivered the file (only those may be deleted later); the member is optional and
+  a `file` op delivered the file (only those may be deleted later; while that download is
+  unfinished the entry has an all-zero SHA-256 and size 0); `owned` is optional and
   absent means not owned, so state files from earlier launchers keep loading. The same release
   with all sizes unchanged means there is nothing to do. A `state.json` that exists but cannot be
   read right now (locked, I/O error) stops the install with nothing written, so a later attempt

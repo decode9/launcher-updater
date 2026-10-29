@@ -90,6 +90,7 @@ typedef struct {
     int (*remove)(void *user, const char *path);                /* 1 also if it did not exist */
     int (*free_space)(void *user, uint64_t *bytes);             /* 0 if unknown (check skipped) */
     install_probe_result (*probe)(void *user, const char *path); /* does path exist? (no open) */
+    int (*remove_dir)(void *user, const char *path); /* removes the folder only if empty; 0 otherwise */
 } install_fs;
 
 typedef int (*install_sink)(void *user, const uint8_t *data, size_t size); /* 0 aborts */

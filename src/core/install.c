@@ -708,6 +708,9 @@ static install_error plan(const release_manifest *m, uint64_t *need)
                 if (present[k] && !state_set_owned(&state, path, op->target.sha256, size, 1)) return INSTALL_ERR_STATE;
             }
             if (!present[k]) {
+                /* Recorded before any byte lands in .part, so a later release that drops the
+                 * path still finds (and deletes) an unfinished download. */
+                if (!state_set_pending(&state, path)) return INSTALL_ERR_STATE;
                 /* Only whole chunks in .part are kept on resume. */
                 uint64_t have = 0, kept = 0;
                 uint32_t i;
@@ -735,12 +738,28 @@ static int in_manifest(const release_manifest *m, const char *path)
     return 0;
 }
 
+/* Removes the folders above path that are left empty, deepest first; stops at the first one
+ * that still holds something (a user's file, another managed file) or cannot be removed. */
+static void remove_empty_parents(const char *path)
+{
+    static char dir[PATH_MAX_BYTES];
+    size_t n;
+    if (!str_copy(dir, sizeof dir, path)) return;
+    for (n = str_len(dir); n > 0; n--) {
+        if (dir[n - 1] != '/') continue;
+        dir[n - 1] = 0;
+        if (!cx->fs->remove_dir(cx->fs->user, dir)) return;
+    }
+}
+
 /* Deletes the managed files (and their "<path>.part") that m no longer mentions, then forgets
  * them. Delete -> forget -> save: a run killed half way repeats the deletions harmlessly. Only
  * paths listed in the state are touched, never a reserved one. A file is deleted only when a
  * `file` op delivered it (owned) and its size is the recorded one; one the launcher only edited
  * (patch/line on the user's file) or that someone else changed (the game, the user) is only
- * forgotten. The .part is always the launcher's own temporary and is deleted. */
+ * forgotten. "<path>.part" is deleted for owned entries (the launcher's own temporary, also of a
+ * download that never finished: pending), never for a file the launcher only edited. Folders
+ * left empty are removed, so a later release may put a file where one of them was. */
 static install_error retire_orphans(const release_manifest *m)
 {
     char part[AUX_BYTES];
@@ -750,16 +769,17 @@ static install_error retire_orphans(const release_manifest *m)
     while (i-- > 0) {
         const state_file *f = &state.files[i];
         if (in_manifest(m, f->path)) continue;
-        if (!manifest_path_is_reserved(f->path, cx->self_exe)) {
+        if (!manifest_path_is_reserved(f->path, cx->self_exe) && f->owned) {
             if (cancelled()) return INSTALL_ERR_CANCELLED;
             str_copy(res->path, sizeof res->path, f->path);
             report(INSTALL_PHASE_RECOVER, f->path, total - i, total, 1);
-            if (f->owned && (!path_size(f->path, &size) || size == f->size)) {
+            if (!state_is_pending(f) && (!path_size(f->path, &size) || size == f->size)) {
                 if (!cx->fs->remove(cx->fs->user, f->path)) return INSTALL_ERR_IO;
             }
             /* "<path>.part" may itself be a file of the new release (path.h allows it). */
             if (!join_suffix(part, f->path, ".part")) return INSTALL_ERR_IO;
             if (!in_manifest(m, part) && !cx->fs->remove(cx->fs->user, part)) return INSTALL_ERR_IO;
+            remove_empty_parents(f->path);
         }
         state_forget(&state, f->path);
         changed = 1;

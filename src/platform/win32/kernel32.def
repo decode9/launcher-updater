@@ -22,6 +22,7 @@ EXPORTS
     GetProcAddress@8
     CreateDirectoryW@8
     DeleteFileW@4
+    RemoveDirectoryW@4
     GetFileAttributesW@4
     SetFileAttributesW@8
     GetDiskFreeSpaceExW@16

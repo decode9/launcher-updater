@@ -160,6 +160,19 @@ int state_set(install_state *s, const char *path, const uint8_t sha256[SHA256_BY
     return record(s, path, sha256, size) != 0;
 }
 
+int state_set_pending(install_state *s, const char *path)
+{
+    static const uint8_t none[SHA256_BYTES];
+    return state_set_owned(s, path, none, 0, 1);
+}
+
+int state_is_pending(const state_file *f)
+{
+    for (int i = 0; i < SHA256_BYTES; i++)
+        if (f->sha256[i]) return 0;
+    return f->size == 0;
+}
+
 int state_set_owned(install_state *s, const char *path, const uint8_t sha256[SHA256_BYTES], uint64_t size, int owned)
 {
     state_file *f = record(s, path, sha256, size);
