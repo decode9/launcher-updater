@@ -171,6 +171,25 @@ window to the front and exits instead). One worker thread then does every reques
    and served by that status.
 7. **Close / exit** stops an install in progress (it resumes next time) and waits for the
    worker before exiting. `minimize` and `open_url` (https only) are handled by the window.
+8. **Repair** (theme `options` menu, 0.3.0; only on the `ready` or `error` screen): like Play it
+   first fetches a fresh status (state `checking`). When the server is open and names a release,
+   the release is installed with full verification (state `installing`, status
+   `status.repairing`): the "already complete" fast path and the "recorded in `state.json` =
+   present" shortcut are skipped, every file is hashed, and any file that does not match is
+   downloaded again. The same atomic, journaled install as Play, but the game is not started.
+   Success fetches the status again and shows the usual screen; failure shows `error` with
+   `status.repair_failed` (or `status.no_space`) until the next retry (30 s), and repair can be
+   chosen again. A status that cannot install (unreachable, closed, no release) drops the repair
+   and is shown as usual; a Play click pending on the same fetch gives way to the repair.
+   The same menu opens the launcher folder in the file manager and, when `launcher.json` has
+   `settings`, starts that program (working folder = the launcher folder; the launcher stays
+   open; a failure shows `status.settings_failed`).
+
+**Language**: the launcher's language is the one chosen in the theme's `language` menu, else
+the Windows UI language. The choice is saved in `.launcher/prefs.json` (`{"lang": "es"}`,
+written atomically through a `.part` file; a missing, unreadable or invalid file only means "no
+choice") and applies at once: theme texts, window title, and news titles (the last status is
+parsed again in the new language).
 
 **No server** (status cannot be fetched): if `.launcher/state.json` holds the complete release
 named by the last cached status **and** that status said `open: true`, the launcher is `ready`
@@ -182,7 +201,8 @@ what the last confirmed state allowed.)
 
 Extra status texts (theme keys, with built-in English fallbacks): `status.update`, `status.resume`, `status.no_release`,
 `status.offline`, `status.connection`, `status.install_failed`, `status.no_space`,
-`status.launch_failed`, `status.self_update`, `status.config`, `status.folder`.
+`status.launch_failed`, `status.self_update`, `status.config`, `status.folder`, and since 0.3.0
+`status.repairing`, `status.repair_failed`, `status.settings_failed`.
 
 ## Self-update
 When `launcher.version` in `/v1/status` is greater (X.Y.Z) than the running version:

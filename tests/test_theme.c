@@ -427,7 +427,7 @@ TEST(required_blobs)
 }
 
 /* The shipped examples parse cleanly, without warnings, and use the expected element types. */
-static void check_example_file(const char *rel, uint32_t want_types)
+static void check_example_file(const char *rel, const char *min_launcher, uint32_t want_types)
 {
     char path[1024];
     static char text[65536];
@@ -446,7 +446,7 @@ static void check_example_file(const char *rel, uint32_t want_types)
     if (th.warnings || th.skipped_elements) fprintf(stderr, "%s: warnings 0x%x\n", rel, th.warnings);
     CHECK_EQ_U64(th.warnings, 0);
     CHECK_EQ_U64(th.skipped_elements, 0);
-    CHECK(!theme_requires_update(&th, "0.1.0"));
+    CHECK(!theme_requires_update(&th, min_launcher));
     for (i = 0; i < theme_element_count(&th); i++) types |= 1u << el(i)->type;
     CHECK_EQ_U64(types, want_types);
     CHECK(theme_title(&th, "es")[0] && theme_title(&th, "en")[0]);
@@ -613,13 +613,23 @@ TEST(news_list)
 
 TEST(examples)
 {
-    /* news_list is not used by the shipped examples yet. */
-    const uint32_t all = ((1u << THEME_EL_TYPE_COUNT) - 1) & ~(1u << THEME_EL_NEWS_LIST);
+    /* The 0.1.0 examples predate news_list; the showcase uses news_list instead of news. */
+    const uint32_t all = (1u << THEME_EL_TYPE_COUNT) - 1;
+    const uint32_t classic = all & ~(1u << THEME_EL_NEWS_LIST);
+    uint32_t i, actions = 0;
     /* The neutral theme is colours only, so it has every type but image. */
-    check_example_file("examples/theme-neutral/theme.json", all & ~(1u << THEME_EL_IMAGE));
+    check_example_file("examples/theme-neutral/theme.json", "0.1.0", classic & ~(1u << THEME_EL_IMAGE));
     CHECK_EQ_U64(theme_required_blobs(&th, 0, 0), 0); /* the embedded theme needs no download */
-    check_example_file("examples/theme-demo/theme.json", all);
+    check_example_file("examples/theme-demo/theme.json", "0.1.0", classic);
     CHECK(theme_required_blobs(&th, 0, 0) > 0);
+    check_example_file("examples/theme-showcase/theme.json", "0.3.0", all & ~(1u << THEME_EL_NEWS));
+    CHECK(theme_requires_update(&th, "0.2.0"));
+    CHECK(th.transparent);
+    CHECK(theme_required_blobs(&th, 0, 0) > 0);
+    for (i = 0; i < theme_element_count(&th); i++) /* every 0.3.0 action is used */
+        if (el(i)->type == THEME_EL_BUTTON) actions |= 1u << el(i)->action;
+    CHECK_EQ_U64(actions & ((1u << THEME_ACT_FILTER) | (1u << THEME_ACT_LANGUAGE) | (1u << THEME_ACT_OPTIONS)),
+                 (1u << THEME_ACT_FILTER) | (1u << THEME_ACT_LANGUAGE) | (1u << THEME_ACT_OPTIONS));
 }
 
 int main(void)
