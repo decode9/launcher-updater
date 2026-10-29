@@ -45,6 +45,8 @@ llvm-rc /nologo /I "$root/src/platform/win32/res" /D "VER_MAJOR=$v_major" /D "VE
         /FO "$obj/launcher.res" "$root/src/platform/win32/res/launcher.rc"
 objs+=("$obj/launcher.res")
 
+# /dependentloadflag:0x800 (LOAD_LIBRARY_SEARCH_SYSTEM32) keeps the static imports out of the exe's
+# folder; it is written into the load config that loadcfg.c declares (no CRT provides one).
 lld-link /nologo /machine:x86 /subsystem:windows,5.01 /nodefaultlib /entry:entry \
-         /dynamicbase /nxcompat /safeseh:no /opt:ref /out:"$out/launcher.exe" "${objs[@]}" "${libs[@]}"
+         /dynamicbase /nxcompat /safeseh:no /dependentloadflag:0x800 /opt:ref /out:"$out/launcher.exe" "${objs[@]}" "${libs[@]}"
 echo "OK: $out/launcher.exe ($(stat -c %s "$out/launcher.exe") bytes, version $version)"

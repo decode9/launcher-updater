@@ -104,6 +104,7 @@ struct IStream {
 #define SW_SHOWNORMAL 1
 #define SW_SHOW 5
 #define SW_MINIMIZE 6
+#define SW_RESTORE 9
 #define SM_CXSCREEN 0
 #define SM_CYSCREEN 1
 #define SWP_NOZORDER 0x0004
@@ -148,6 +149,8 @@ IMPORT BOOL WINAPI ReleaseCapture(void);
 IMPORT BOOL WINAPI ScreenToClient(HWND, POINT *);
 IMPORT int WINAPI GetSystemMetrics(int);
 IMPORT BOOL WINAPI SetForegroundWindow(HWND);
+IMPORT HWND WINAPI FindWindowW(const wchar_t *, const wchar_t *);
+IMPORT BOOL WINAPI IsIconic(HWND);
 
 IMPORT HDC WINAPI CreateCompatibleDC(HDC);
 IMPORT HBITMAP WINAPI CreateCompatibleBitmap(HDC, int, int);

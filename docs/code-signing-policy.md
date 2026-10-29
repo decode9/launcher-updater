@@ -55,8 +55,11 @@ as follows:
 - Every file is requested and verified by its SHA-256, taken from the pinned release manifest.
   A file only takes its final name, by an atomic rename, after it is verified.
 - Every path is confined to the launcher's folder; one bad path rejects the whole manifest.
-- A new `launcher.exe` is accepted only after its SHA-256 matches the manifest; once releases
-  are signed, it must also carry a valid Authenticode signature from the same publisher.
+- A new `launcher.exe` is accepted only after its size and SHA-256 match the status served
+  over the pinned connection; once releases are signed, it must also carry a valid,
+  non-revoked Authenticode signature whose signer certificate has the same subject and issuer
+  as the running one (with SignPath Foundation that identifies the signer, SignPath
+  Foundation, not this project alone).
 - The launcher does not change system settings, does not need administrator rights
   (`asInvoker`) and installs nothing outside its folder: deleting the folder uninstalls it.
 

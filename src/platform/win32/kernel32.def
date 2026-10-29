@@ -18,6 +18,8 @@ EXPORTS
     GetLocaleInfoW@16
     SetEndOfFile@4
     MoveFileExW@12
+    GetModuleHandleW@4
+    GetProcAddress@8
     CreateDirectoryW@8
     DeleteFileW@4
     GetDiskFreeSpaceExW@16

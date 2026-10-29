@@ -6,4 +6,4 @@ EXPORTS
     CryptMsgClose@4
     CertCloseStore@8
     CertFindCertificateInStore@24
-    CertGetNameStringW@24
+    CertNameToStrW@20

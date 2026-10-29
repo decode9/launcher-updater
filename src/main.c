@@ -13,6 +13,7 @@
 
 void entry(void)
 {
+    sys_harden_dll_search(); /* before anything can load a DLL on demand */
     if (sys_has_flag("--theme-preview")) sys_exit(app_preview());
     if (sys_has_flag("--swap")) sys_exit(app_swap());
     if (sys_has_flag("--install")) sys_exit(app_install());

@@ -22,6 +22,7 @@
 #include "core/str.h"
 #include "core/theme.h"
 #include "log.h"
+#include "platform/win32/instance.h"
 #include "platform/win32/proc.h"
 #include "platform/win32/rt.h"
 #include "platform/win32/sys.h"
@@ -344,6 +345,12 @@ int app_window(void)
     ui_config cfg;
     int config_ok;
     if (!app_begin("")) return 1;
+    if (!app_lock(0)) {
+        log_line(ui_bring_to_front(instance_key()) ? "exit: brought the running launcher to the front"
+                                                   : "exit: the running launcher has no window");
+        app_end();
+        return 0;
+    }
     g_skip_update = sys_has_flag("--skip-update");
     sys_language(g_lang, sizeof g_lang);
     config_ok = app_load_config();
@@ -354,6 +361,7 @@ int app_window(void)
     cfg.lang = g_lang;
     cfg.load_blob = load_blob;
     cfg.on_action = on_action;
+    cfg.instance_key = instance_key();
     if (!event_create(&g_wake) || !ui_create(&g_theme, &cfg)) {
         log_line("error: cannot create the window");
         app_end();
@@ -371,6 +379,7 @@ int app_window(void)
     event_set(&g_wake);
     thread_join(&g_worker);
     log_line("exit");
+    app_unlock();
     app_end();
     return 0;
 }

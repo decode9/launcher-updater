@@ -16,7 +16,10 @@
 ui_window g_ui;
 theme_model g_ui_theme;
 
-static const wchar_t CLASS_NAME[] = L"LauncherWindow";
+#define CLASS_BASE L"LauncherWindow"
+#define CLASS_CHARS 64
+
+static wchar_t g_class[CLASS_CHARS];
 static HWND g_hwnd_shared; /* read by other threads (atomic) to post to the window */
 static int g_exit_reported;
 
@@ -447,6 +450,29 @@ static LRESULT WINAPI window_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 
 /* ---- Lifetime ------------------------------------------------------------------------- */
 
+/* out = "LauncherWindow" or "LauncherWindow-<key>" (key is ASCII, truncated to fit). */
+static void class_name(wchar_t out[CLASS_CHARS], const char *key)
+{
+    size_t n = sizeof CLASS_BASE / sizeof(wchar_t) - 1, i;
+    memcpy(out, CLASS_BASE, sizeof CLASS_BASE);
+    if (!key || !key[0]) return;
+    out[n++] = '-';
+    for (i = 0; key[i] && n < CLASS_CHARS - 1; i++) out[n++] = (wchar_t)(unsigned char)key[i];
+    out[n] = 0;
+}
+
+int ui_bring_to_front(const char *instance_key)
+{
+    wchar_t name[CLASS_CHARS];
+    HWND hwnd;
+    class_name(name, instance_key);
+    hwnd = FindWindowW(name, 0);
+    if (!hwnd) return 0;
+    if (IsIconic(hwnd)) ShowWindow(hwnd, SW_RESTORE);
+    SetForegroundWindow(hwnd);
+    return 1;
+}
+
 int ui_create(const theme_model *theme, const ui_config *cfg)
 {
     WNDCLASSEXW wc;
@@ -467,9 +493,10 @@ int ui_create(const theme_model *theme, const ui_config *cfg)
     wc.hInstance = UI_HINSTANCE;
     wc.hIcon = LoadIconW(UI_HINSTANCE, (const wchar_t *)(uintptr_t)1); /* optional resource 1 */
     wc.hCursor = LoadCursorW(0, IDC_ARROW);
-    wc.lpszClassName = CLASS_NAME;
+    class_name(g_class, cfg->instance_key);
+    wc.lpszClassName = g_class;
     if (!RegisterClassExW(&wc)) return 0;
-    g_ui.hwnd = CreateWindowExW(WS_EX_APPWINDOW, CLASS_NAME, L"", WS_POPUP | WS_SYSMENU | WS_MINIMIZEBOX, 0, 0,
+    g_ui.hwnd = CreateWindowExW(WS_EX_APPWINDOW, g_class, L"", WS_POPUP | WS_SYSMENU | WS_MINIMIZEBOX, 0, 0,
                                 theme->width, theme->height, 0, 0, UI_HINSTANCE, 0);
     if (!g_ui.hwnd) return 0;
 

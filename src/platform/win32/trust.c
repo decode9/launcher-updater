@@ -14,16 +14,16 @@
 #define CMSG_SIGNER_INFO_PARAM 6
 #define ENCODING (0x00000001UL | 0x00010000UL) /* X509_ASN_ENCODING | PKCS_7_ASN_ENCODING */
 #define CERT_FIND_SUBJECT_CERT 0x000B0000UL
-#define CERT_NAME_SIMPLE_DISPLAY_TYPE 4
+#define CERT_X500_NAME_STR 3
+#define CERT_NAME_STR_REVERSE_FLAG 0x02000000UL
 #define WTD_UI_NONE 2
-#define WTD_REVOKE_NONE 0
+#define WTD_REVOKE_WHOLECHAIN 1
 #define WTD_CHOICE_FILE 1
 #define WTD_STATEACTION_VERIFY 1
 #define WTD_STATEACTION_CLOSE 2
-#define WTD_REVOCATION_CHECK_NONE 0x10
-#define WTD_CACHE_ONLY_URL_RETRIEVAL 0x1000
+#define WTD_REVOCATION_CHECK_CHAIN_EXCLUDE_ROOT 0x80
 #define SIGNER_INFO_BYTES 65536
-#define NAME_CHARS 256
+#define NAME_CHARS 512
 
 typedef struct {
     DWORD data1;
@@ -66,6 +66,15 @@ typedef struct {
     void *extensions;
 } CERT_INFO;
 
+/* CERT_CONTEXT (what CertFindCertificateInStore returns). */
+typedef struct {
+    DWORD encoding;
+    u8 *encoded;
+    DWORD encoded_size;
+    CERT_INFO *info;
+    HANDLE store;
+} CERT_CONTEXT;
+
 /* Leading fields of CMSG_SIGNER_INFO. */
 typedef struct {
     DWORD version;
@@ -98,25 +107,38 @@ IMPORT BOOL WINAPI CryptQueryObject(DWORD, const void *, DWORD, DWORD, DWORD, DW
 IMPORT BOOL WINAPI CryptMsgGetParam(HANDLE, DWORD, DWORD, void *, DWORD *);
 IMPORT BOOL WINAPI CryptMsgClose(HANDLE);
 IMPORT BOOL WINAPI CertCloseStore(HANDLE, DWORD);
-IMPORT const void *WINAPI CertFindCertificateInStore(HANDLE, DWORD, DWORD, DWORD, const void *, const void *);
-IMPORT DWORD WINAPI CertGetNameStringW(const void *, DWORD, DWORD, void *, wchar_t *, DWORD);
-IMPORT BOOL WINAPI CertFreeCertificateContext(const void *);
+IMPORT const CERT_CONTEXT *WINAPI CertFindCertificateInStore(HANDLE, DWORD, DWORD, DWORD, const void *,
+                                                              const void *);
+IMPORT DWORD WINAPI CertNameToStrW(DWORD, const BLOB *, DWORD, wchar_t *, DWORD);
+IMPORT BOOL WINAPI CertFreeCertificateContext(const CERT_CONTEXT *);
 
 static GUID generic_verify_v2 = {0x00AAC56BUL, 0xCD44, 0x11D0, {0x8C, 0xC2, 0x00, 0xC0, 0x4F, 0xC2, 0x95, 0xEE}};
 static wchar_t wide_path[FS_PATH_BYTES];
 static u8 signer_info[SIGNER_INFO_BYTES];
 static wchar_t name[NAME_CHARS];
 
-/* Reads the subject of the first signer's certificate. Returns 1 if the file has an embedded
- * signature (even if the subject cannot be read). */
-static int read_signer(char *subject, size_t cap)
+/* Writes a certificate name (X.500 string, most significant RDN first, e.g.
+ * "C=US, O=Example, CN=Example Signer") as UTF-8. A name that does not fit is not truncated:
+ * out stays "" so that the signer is treated as unreadable (a prefix must never compare equal). */
+static void name_to_utf8(const BLOB *blob, char *out, size_t cap)
+{
+    const DWORD type = CERT_X500_NAME_STR | CERT_NAME_STR_REVERSE_FLAG;
+    DWORD need = CertNameToStrW(ENCODING, blob, type, 0, 0);
+    out[0] = 0;
+    if (need <= 1 || need > NAME_CHARS) return;
+    if (CertNameToStrW(ENCODING, blob, type, name, NAME_CHARS) != need) return;
+    if (WideCharToMultiByte(CP_UTF8, 0, name, -1, out, (int)cap, 0, 0) <= 0) out[0] = 0;
+}
+
+/* Reads subject and issuer of the first signer's certificate. Returns 1 if the file has an
+ * embedded signature (even if the names cannot be read). */
+static int read_signer(trust_signer *signer)
 {
     DWORD encoding, content, format, size = SIGNER_INFO_BYTES;
     HANDLE store = 0, msg = 0;
-    const void *cert = 0;
+    const CERT_CONTEXT *cert = 0;
     CERT_INFO key;
     const SIGNER_INFO_HEAD *head = (const SIGNER_INFO_HEAD *)signer_info;
-    int n;
     if (!CryptQueryObject(CERT_QUERY_OBJECT_FILE, wide_path, CERT_QUERY_CONTENT_FLAG_PKCS7_SIGNED_EMBED,
                           CERT_QUERY_FORMAT_FLAG_BINARY, 0, &encoding, &content, &format, &store, &msg, 0))
         return 0;
@@ -127,10 +149,9 @@ static int read_signer(char *subject, size_t cap)
         cert = CertFindCertificateInStore(store, ENCODING, 0, CERT_FIND_SUBJECT_CERT, &key, 0);
     }
     if (cert) {
-        n = (int)CertGetNameStringW(cert, CERT_NAME_SIMPLE_DISPLAY_TYPE, 0, 0, name, NAME_CHARS);
-        if (n > 1) {
-            n = WideCharToMultiByte(CP_UTF8, 0, name, -1, subject, (int)cap, 0, 0);
-            if (n <= 0) subject[0] = 0;
+        if (cert->info) {
+            name_to_utf8(&cert->info->subject, signer->subject, sizeof signer->subject);
+            name_to_utf8(&cert->info->issuer, signer->issuer, sizeof signer->issuer);
         }
         CertFreeCertificateContext(cert);
     }
@@ -139,15 +160,16 @@ static int read_signer(char *subject, size_t cap)
     return 1;
 }
 
-trust_result trust_check(const char *path, char *subject, size_t cap)
+trust_result trust_check(const char *path, trust_signer *signer)
 {
     WINTRUST_FILE_INFO file;
     WINTRUST_DATA data;
     long verdict;
-    if (cap) subject[0] = 0;
+    signer->subject[0] = 0;
+    signer->issuer[0] = 0;
     if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path, -1, wide_path, FS_PATH_BYTES) <= 0)
         return TRUST_INVALID;
-    if (!read_signer(subject, cap)) return TRUST_UNSIGNED;
+    if (!read_signer(signer)) return TRUST_UNSIGNED;
 
     memset(&file, 0, sizeof file);
     file.size = sizeof file;
@@ -155,15 +177,19 @@ trust_result trust_check(const char *path, char *subject, size_t cap)
     memset(&data, 0, sizeof data);
     data.size = sizeof data;
     data.ui_choice = WTD_UI_NONE;
-    data.revocation_checks = WTD_REVOKE_NONE;
+    /* Revocation of every certificate in the chain except the root (roots are trusted by being
+     * in the store and publish no CRL for themselves), fetching CRL/OCSP over the network. If
+     * the status cannot be obtained (offline, CRL server down) WinVerifyTrust fails with
+     * CERT_E_REVOCATION_FAILURE and the file is TRUST_INVALID: fail closed. */
+    data.revocation_checks = WTD_REVOKE_WHOLECHAIN;
     data.union_choice = WTD_CHOICE_FILE;
     data.file = &file;
     data.state_action = WTD_STATEACTION_VERIFY;
-    data.prov_flags = WTD_REVOCATION_CHECK_NONE | WTD_CACHE_ONLY_URL_RETRIEVAL;
+    data.prov_flags = WTD_REVOCATION_CHECK_CHAIN_EXCLUDE_ROOT;
     verdict = WinVerifyTrust(INVALID_HANDLE, &generic_verify_v2, &data);
     data.state_action = WTD_STATEACTION_CLOSE;
     WinVerifyTrust(INVALID_HANDLE, &generic_verify_v2, &data);
-    return verdict == 0 && subject[0] ? TRUST_VALID : TRUST_INVALID;
+    return verdict == 0 && signer->subject[0] && signer->issuer[0] ? TRUST_VALID : TRUST_INVALID;
 }
 
 const char *trust_result_text(trust_result r)

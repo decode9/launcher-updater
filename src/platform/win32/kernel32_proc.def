@@ -1,4 +1,4 @@
-; Threads, events and processes (thread.c, proc.c). See kernel32.def for the rest.
+; Threads, events, mutexes and processes (thread.c, instance.c, proc.c). See kernel32.def for the rest.
 LIBRARY kernel32.dll
 EXPORTS
     CreateThread@24
@@ -9,3 +9,5 @@ EXPORTS
     GetCurrentProcessId@0
     CreateProcessW@40
     Sleep@4
+    CreateMutexW@12
+    ReleaseMutex@4

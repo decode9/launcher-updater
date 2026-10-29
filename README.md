@@ -23,9 +23,14 @@ announces a newer launcher. Everything is logged to `launcher.log`.
 |---|---|
 | `launcher.exe` | the window (flow in [`docs/spec.md`](docs/spec.md#launcher-flow)) |
 | `launcher.exe --status` | fetch the status, log it, exit |
-| `launcher.exe --install` | install or update the release without a window, exit |
+| `launcher.exe --install` | install or update the release without a window, exit (`4` if another launcher is working in this folder) |
 | `launcher.exe --theme-preview [folder]` | show a theme without a server ([`docs/theming.md`](docs/theming.md)) |
 | `launcher.exe --swap <pid>` | internal: second half of self-update |
+
+One launcher per folder: the window and `--install` take a named mutex keyed on the launcher
+folder (`Local\decode9-launcher-<hash>`). A second window brings the running one to the front and
+exits with `0`; `--install` exits with `4` and changes nothing. `--status` and `--theme-preview`
+do not take it; `--swap` holds it while it replaces the executable and lets go before restarting it.
 
 ## Layout
 
@@ -79,7 +84,7 @@ regardless of `opens_at`.
 Exit codes: `0` status read, `1` configuration error, `2` network or server error.
 
 Install a release into an empty folder with `launcher.exe --install` (exit code `3` = install
-error). `make-release.py` generates a 22 MB example release (a 20 MiB file in 8 MiB chunks, a
+error, `4` = another launcher is working in this folder). `make-release.py` generates a 22 MB example release (a 20 MiB file in 8 MiB chunks, a
 patch and a line op) into `example-root/generated/` and rewrites `release.json` (restart
 `server.py` afterwards); it prints the SHA-256 each file must end with:
 
@@ -129,6 +134,10 @@ exits. Details and the signer rule: [`docs/spec.md`](docs/spec.md#self-update).
 - **Strict parsing.** The JSON parser is strict RFC 8259, iterative (bounded depth) and works in
   caller-provided memory; integers are exact 64-bit; HTTP bodies need `Content-Length`.
 - **Bounded waits.** Connect, send and receive time out.
+- **DLL search restricted to System32.** The exe's load config sets `DependentLoadFlags` to
+  `LOAD_LIBRARY_SEARCH_SYSTEM32` (static imports such as crypt32, wintrust, secur32, gdiplus),
+  and the first thing it does is `SetDefaultDllDirectories` with the same flag (DLLs loaded
+  later on demand), so a DLL planted next to `launcher.exe` (e.g. in Downloads) is never loaded.
 - **`blobs_url`.** Blobs may come from another https host (a CDN). That connection uses the
   system's chain validation instead of the pin; each blob is still verified against the
   SHA-256 from the pinned manifest.

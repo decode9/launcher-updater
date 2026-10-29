@@ -7,6 +7,7 @@
 #include "testlib.h"
 #include "../src/core/install.h"
 #include "../src/core/lineop.h"
+#include "../src/core/state.h"
 #include "../src/core/str.h"
 
 #include <errno.h>
@@ -454,6 +455,219 @@ TEST(cancel_keeps_progress)
     check_release_a();
 }
 
+/* ---- files no longer in the release ---- */
+
+static char many_text[600000];
+static json_token many_tokens[40000];
+
+/* Release `version` with n empty files "<dir>/<i>" plus the extra ops (JSON, may be ""). */
+static void make_many(const char *version, char dir, int n, const char *extra)
+{
+    char e[65];
+    size_t k;
+    int i;
+    hex(sha_empty, e);
+    k = (size_t)snprintf(many_text, sizeof many_text, "{\"schema\":1,\"version\":\"%s\",\"ops\":[", version);
+    for (i = 0; i < n; i++)
+        k += (size_t)snprintf(many_text + k, sizeof many_text - k,
+                              "%s{\"op\":\"file\",\"path\":\"%c/%d\",\"sha256\":\"%s\",\"size\":0,\"chunks\":[]}",
+                              i ? "," : "", dir, i, e);
+    snprintf(many_text + k, sizeof many_text - k, "%s%s]}", n && extra[0] ? "," : "", extra);
+    CHECK(manifest_parse(&manifest, many_text, strlen(many_text), many_tokens, 40000, "launcher.exe", 0) ==
+          MANIFEST_OK);
+}
+
+/* Occurrences of needle in .launcher/state.json. */
+static int state_count(const char *needle)
+{
+    static char buf[1 << 20];
+    char n[600];
+    const char *p;
+    FILE *f;
+    size_t got;
+    int count = 0;
+    native(n, INSTALL_STATE_FILE);
+    f = fopen(n, "rb");
+    if (!f) return -1;
+    got = fread(buf, 1, sizeof buf - 1, f);
+    fclose(f);
+    buf[got] = 0;
+    for (p = buf; (p = strstr(p, needle)) != 0; p++) count++;
+    return count;
+}
+
+/* Two releases with disjoint paths that together exceed the state's capacity. */
+TEST(orphans_keep_state_within_capacity)
+{
+    _Static_assert(2 * 2100 > STATE_FILES_MAX, "r1 + r2 must not fit in the state");
+    fresh_root();
+    make_many("r1", 'a', 2100, "");
+    CHECK(install_run(&ctx, &manifest, &result) == INSTALL_OK);
+    CHECK(exists("a/0") && exists("a/2099"));
+    make_many("r2", 'b', 2100, "");
+    CHECK(install_run(&ctx, &manifest, &result) == INSTALL_OK);
+    CHECK(!exists("a/0") && !exists("a/1050") && !exists("a/2099"));
+    CHECK(exists("b/0") && exists("b/2099"));
+    CHECK(install_is_current(&ctx, "r2"));
+    CHECK(state_count("\"a/") == 0);
+    CHECK(state_count("\"b/") == 2100);
+}
+
+TEST(orphans_deleted_user_files_kept)
+{
+    fresh_root();
+    make_many("r1", 'a', 4, "");
+    CHECK(install_run(&ctx, &manifest, &result) == INSTALL_OK);
+    write_file("a/user.sav", "save", 4);    /* never written by the launcher */
+    write_file("a/1.part", "half", 4);      /* abandoned download of an orphan */
+    write_file("a/2", "changed", 7);        /* managed, but rewritten by the game */
+    write_file("a/3.part", "x", 1);         /* becomes a file of r2 below */
+    make_many("r2", 'b', 2, "{\"op\":\"line\",\"path\":\"a/3.part\",\"prefix\":\"K=\",\"line\":\"K=1\"}");
+    CHECK(install_run(&ctx, &manifest, &result) == INSTALL_OK);
+    CHECK(!exists("a/0") && !exists("a/1") && !exists("a/1.part") && !exists("a/3"));
+    CHECK(file_has("a/user.sav", (const uint8_t *)"save", 4));
+    CHECK(file_has("a/2", (const uint8_t *)"changed", 7));
+    CHECK(file_has("a/3.part", (const uint8_t *)"x\r\nK=1\r\n", 8));
+    CHECK(exists("b/0") && exists("b/1"));
+    CHECK(state_count("\"a/2\"") == 0);
+    CHECK(install_is_current(&ctx, "r2"));
+}
+
+/* Dies at every mutating file operation of an update that deletes orphans; the next run must
+ * finish it without touching the user's file. */
+TEST(crash_while_deleting_orphans_recovers)
+{
+    int n, finished = 0;
+    for (n = 0; !finished && n < 200; n++) {
+        fresh_root();
+        make_many("r1", 'a', 5, "");
+        CHECK(install_run(&ctx, &manifest, &result) == INSTALL_OK);
+        write_file("a/user.sav", "save", 4);
+        write_file("a/4.part", "half", 4);
+        make_many("r2", 'b', 3, "");
+        ops_left = n;
+        finished = install_run(&ctx, &manifest, &result) == INSTALL_OK && !dead;
+        dead = 0;
+        ops_left = -1;
+        if (install_run(&ctx, &manifest, &result) != INSTALL_OK) {
+            fprintf(stderr, "crash at op %d: rerun failed: %s (%s)\n", n, install_error_text(result.error), result.path);
+            CHECK(0);
+            break;
+        }
+        CHECK(!exists("a/0") && !exists("a/4") && !exists("a/4.part"));
+        CHECK(exists("b/0") && exists("b/2"));
+        CHECK(file_has("a/user.sav", (const uint8_t *)"save", 4));
+        CHECK(state_count("\"a/") == 0);
+    }
+    CHECK(finished);
+    CHECK(n > 8);
+}
+
+/* A file the user (or the game) already had and the launcher only edited with a line op is
+ * not the launcher's: when a release stops mentioning it, it is forgotten, never deleted. */
+TEST(orphan_line_edit_of_user_file_is_kept)
+{
+    fresh_root();
+    write_file("cfg/settings.ini", "a=0\r\n", 5);
+    make_many("r1", 'a', 1, "{\"op\":\"line\",\"path\":\"cfg/settings.ini\",\"prefix\":\"K=\",\"line\":\"K=1\"}");
+    CHECK(install_run(&ctx, &manifest, &result) == INSTALL_OK);
+    CHECK(file_has("cfg/settings.ini", (const uint8_t *)"a=0\r\nK=1\r\n", 10));
+    CHECK(state_count("\"owned\": true") == 1); /* a/0 only */
+    write_file("cfg/settings.ini.part", "tmp", 3);
+    make_many("r2", 'a', 1, "");
+    CHECK(install_run(&ctx, &manifest, &result) == INSTALL_OK);
+    CHECK(file_has("cfg/settings.ini", (const uint8_t *)"a=0\r\nK=1\r\n", 10));
+    CHECK(!exists("cfg/settings.ini.part")); /* the launcher's own temporary */
+    CHECK(state_count("settings.ini") == 0);
+    CHECK(exists("a/0"));
+}
+
+/* Delivered whole by a file op, then edited by a line op (r1) or a patch (A, B): still the
+ * launcher's, so it is deleted once a release drops it. A line op alone (cfg.ini) is not. */
+TEST(orphan_delivered_then_edited_is_deleted)
+{
+    fresh_root();
+    make_many("r1", 'a', 2, "{\"op\":\"line\",\"path\":\"a/1\",\"prefix\":\"K=\",\"line\":\"K=1\"}");
+    CHECK(install_run(&ctx, &manifest, &result) == INSTALL_OK);
+    CHECK(file_has("a/1", (const uint8_t *)"K=1\r\n", 5));
+    make_many("r2", 'b', 1, "");
+    CHECK(install_run(&ctx, &manifest, &result) == INSTALL_OK);
+    CHECK(!exists("a/0") && !exists("a/1"));
+
+    fresh_root();
+    make_manifest('A', 1);
+    CHECK(install_run(&ctx, &manifest, &result) == INSTALL_OK);
+    make_manifest('B', 1);
+    CHECK(install_run(&ctx, &manifest, &result) == INSTALL_OK);
+    CHECK(state_count("\"owned\": true") == 2); /* data/big.pak (patched) and empty.dat */
+    make_many("r3", 'b', 1, "");
+    CHECK(install_run(&ctx, &manifest, &result) == INSTALL_OK);
+    CHECK(!exists("data/big.pak") && !exists("empty.dat"));
+    CHECK(file_has("cfg.ini", (const uint8_t *)"Server=B.example\r\n", 18));
+    CHECK(state_count("\"data/") == 0 && state_count("cfg.ini") == 0);
+}
+
+/* A state.json written before "owned" existed still loads; its orphans are only forgotten. */
+TEST(orphans_of_legacy_state_are_only_forgotten)
+{
+    static char buf[1 << 16], out[1 << 16];
+    char n[600];
+    const char *p, *hit;
+    size_t got, k = 0;
+    FILE *f;
+    fresh_root();
+    make_many("r1", 'a', 2, "");
+    CHECK(install_run(&ctx, &manifest, &result) == INSTALL_OK);
+    native(n, INSTALL_STATE_FILE);
+    f = fopen(n, "rb");
+    got = fread(buf, 1, sizeof buf - 1, f);
+    fclose(f);
+    buf[got] = 0;
+    for (p = buf; (hit = strstr(p, ", \"owned\": true")) != 0; p = hit + 15) {
+        memcpy(out + k, p, (size_t)(hit - p));
+        k += (size_t)(hit - p);
+    }
+    k += (size_t)snprintf(out + k, sizeof out - k, "%s", p);
+    write_file(INSTALL_STATE_FILE, out, k);
+    CHECK(state_count("owned") == 0);
+    CHECK(install_is_current(&ctx, "r1")); /* still loads */
+    make_many("r2", 'b', 1, "");
+    CHECK(install_run(&ctx, &manifest, &result) == INSTALL_OK);
+    CHECK(exists("a/0") && exists("a/1"));
+    CHECK(state_count("\"a/") == 0);
+    CHECK(exists("b/0") && state_count("\"owned\": true") == 1);
+}
+
+TEST(state_owned_round_trip)
+{
+    static install_state s;
+    static char out[4096];
+    static const char legacy[] = "{\"schema\": 1, \"release\": \"r\", \"files\": [{\"path\": \"x\", \"sha256\": \""
+                                 "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\", \"size\": 0}]}";
+    static const char bad[] = "{\"schema\": 1, \"release\": \"r\", \"files\": [{\"path\": \"x\", \"sha256\": \""
+                              "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\", \"size\": 0, "
+                              "\"owned\": 1}]}";
+    size_t len;
+    state_clear(&s);
+    CHECK(state_set(&s, "edited.ini", sha_empty, 0));
+    CHECK(state_set_owned(&s, "game.pak", sha_big, 3500, 1));
+    CHECK(state_set(&s, "game.pak", sha_res_a, 4800)); /* an edit keeps the owner */
+    CHECK(state_find(&s, "game.pak")->owned == 1 && state_find(&s, "edited.ini")->owned == 0);
+    len = state_write(&s, out, sizeof out);
+    CHECK(len > 0);
+    out[len] = 0;
+    CHECK(strstr(out, "\"size\": 4800, \"owned\": true}") != 0);
+    CHECK(strstr(out, "\"size\": 0}") != 0);
+    CHECK(state_parse(&s, out, len, tokens, 4096));
+    CHECK(s.file_count == 2);
+    CHECK(state_find(&s, "game.pak")->owned == 1 && state_find(&s, "edited.ini")->owned == 0);
+    CHECK(state_matches(&s, "game.pak", sha_res_a, 4800));
+    CHECK(state_set_owned(&s, "game.pak", sha_res_a, 4800, 0) && state_find(&s, "game.pak")->owned == 0);
+    CHECK(state_parse(&s, legacy, sizeof legacy - 1, tokens, 4096));
+    CHECK(s.file_count == 1 && state_find(&s, "x")->owned == 0);
+    CHECK(!state_parse(&s, bad, sizeof bad - 1, tokens, 4096) && s.file_count == 0);
+}
+
 /* Same cases as the reference applier of the contract (apply_line). */
 static const char *line_case(const char *in, const char *prefix, const char *line)
 {
@@ -490,6 +704,13 @@ int main(void)
     RUN(existing_files_are_hashed_once_and_kept);
     RUN(not_enough_space);
     RUN(cancel_keeps_progress);
+    RUN(orphans_keep_state_within_capacity);
+    RUN(orphans_deleted_user_files_kept);
+    RUN(crash_while_deleting_orphans_recovers);
+    RUN(orphan_line_edit_of_user_file_is_kept);
+    RUN(orphan_delivered_then_edited_is_deleted);
+    RUN(orphans_of_legacy_state_are_only_forgotten);
+    RUN(state_owned_round_trip);
     RUN(line_semantics);
     fresh_root();
     {

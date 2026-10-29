@@ -18,6 +18,15 @@ static int read_hash(const json_doc *doc, int i, uint8_t out[SHA256_BYTES])
     return json_string(doc, i, hex, sizeof hex, &n) && hex_decode(hex, n, out, SHA256_BYTES);
 }
 
+/* Optional boolean member: absent = 0. */
+static int read_flag(const json_doc *doc, int obj, const char *key, int *out)
+{
+    int i = json_get(doc, obj, key);
+    *out = 0;
+    if (i < 0) return 1;
+    return json_bool(doc, i, out);
+}
+
 static int parse_files(install_state *s, const json_doc *doc, int files)
 {
     int f;
@@ -26,7 +35,8 @@ static int parse_files(install_state *s, const json_doc *doc, int files)
     for (f = json_first(doc, files); f >= 0; f = json_next(doc, f)) {
         state_file *e = &s->files[s->file_count];
         if (!json_string(doc, json_get(doc, f, "path"), e->path, sizeof e->path, 0) || !path_is_safe_relative(e->path) ||
-            !read_hash(doc, json_get(doc, f, "sha256"), e->sha256) || !json_u64(doc, json_get(doc, f, "size"), &e->size))
+            !read_hash(doc, json_get(doc, f, "sha256"), e->sha256) || !json_u64(doc, json_get(doc, f, "size"), &e->size) ||
+            !read_flag(doc, f, "owned", &e->owned))
             return 0;
         s->file_count++;
     }
@@ -97,7 +107,7 @@ size_t state_write(const install_state *s, char *out, size_t cap)
         sb_add_hex(&sb, s->files[i].sha256, SHA256_BYTES);
         sb_add(&sb, "\", \"size\": ");
         sb_add_u64(&sb, s->files[i].size);
-        sb_add_char(&sb, '}');
+        sb_add(&sb, s->files[i].owned ? ", \"owned\": true}" : "}");
     }
     sb_add(&sb, "],\n \"journals\": [");
     for (i = 0; i < s->journal_count; i++) {
@@ -122,17 +132,39 @@ int state_matches(const install_state *s, const char *path, const uint8_t sha256
     return f && f->size == size && mem_eq(f->sha256, sha256, SHA256_BYTES);
 }
 
-int state_set(install_state *s, const char *path, const uint8_t sha256[SHA256_BYTES], uint64_t size)
+/* The entry for path, added (not owned) if missing; 0 if full. */
+static state_file *entry(install_state *s, const char *path)
 {
     state_file *f = (state_file *)state_find(s, path);
-    if (!f) {
-        if (s->file_count >= STATE_FILES_MAX) return 0;
-        f = &s->files[s->file_count];
-        if (!str_copy(f->path, sizeof f->path, path)) return 0;
-        s->file_count++;
-    }
+    if (f) return f;
+    if (s->file_count >= STATE_FILES_MAX) return 0;
+    f = &s->files[s->file_count];
+    if (!str_copy(f->path, sizeof f->path, path)) return 0;
+    f->owned = 0;
+    s->file_count++;
+    return f;
+}
+
+/* The entry for path holding the given content; 0 if the state is full. */
+static state_file *record(install_state *s, const char *path, const uint8_t sha256[SHA256_BYTES], uint64_t size)
+{
+    state_file *f = entry(s, path);
+    if (!f) return 0;
     for (int i = 0; i < SHA256_BYTES; i++) f->sha256[i] = sha256[i];
     f->size = size;
+    return f;
+}
+
+int state_set(install_state *s, const char *path, const uint8_t sha256[SHA256_BYTES], uint64_t size)
+{
+    return record(s, path, sha256, size) != 0;
+}
+
+int state_set_owned(install_state *s, const char *path, const uint8_t sha256[SHA256_BYTES], uint64_t size, int owned)
+{
+    state_file *f = record(s, path, sha256, size);
+    if (!f) return 0;
+    f->owned = owned ? 1 : 0;
     return 1;
 }
 

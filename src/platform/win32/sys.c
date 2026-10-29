@@ -5,6 +5,21 @@
 #include "core/str.h"
 #include "win32.h"
 
+#define LOAD_LIBRARY_SEARCH_SYSTEM32 0x800
+
+typedef BOOL(WINAPI *set_default_dll_directories_fn)(DWORD);
+
+/* SetDefaultDllDirectories is looked up instead of imported: it exists on Windows 8+ and on
+ * Windows 7 only with KB2533623, and a missing static import would stop the exe from starting
+ * at all. kernel32 is always loaded, so GetModuleHandleW cannot load anything planted. */
+void sys_harden_dll_search(void)
+{
+    HANDLE k32 = GetModuleHandleW(L"kernel32.dll");
+    set_default_dll_directories_fn set_dirs =
+        k32 ? (set_default_dll_directories_fn)GetProcAddress(k32, "SetDefaultDllDirectories") : 0;
+    if (set_dirs) set_dirs(LOAD_LIBRARY_SEARCH_SYSTEM32); /* failure is not fatal: keep going */
+}
+
 /* Skips one command-line argument following the CommandLineToArgvW quoting rules closely
  * enough for flags: quotes toggle, whitespace ends an unquoted argument. */
 static const wchar_t *next_arg(const wchar_t *p, const wchar_t **start, const wchar_t **end)

@@ -7,6 +7,26 @@ heading matches the tag as the GitHub Release notes.
 
 ## [Unreleased]
 
+### Security
+
+- DLLs are only loaded from System32 (`DependentLoadFlags` in a load configuration directory, and
+  `SetDefaultDllDirectories` at start): a DLL planted next to `launcher.exe` is not loaded.
+- Self-update compares the signer's full subject and issuer names, not only the common name, and
+  checks revocation of the whole chain online; when the status cannot be checked the update is
+  refused and the current version keeps running.
+
+### Added
+
+- Single instance per folder: a second window brings the running one to the front;
+  `--install` exits with code `4` while another launcher works in the folder.
+
+### Fixed
+
+- A release that renames many files no longer fails with a full state: files of the previous
+  release that the new one does not mention are deleted at the start of the install. Only files
+  the launcher delivered whole (`file` ops) are deleted; files it only edited are kept.
+- A launcher refused by the single-instance lock can still write to `launcher.log`.
+
 ## [0.1.1] - 2026-10-27
 
 ### Security

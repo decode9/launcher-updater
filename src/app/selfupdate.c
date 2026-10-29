@@ -1,11 +1,13 @@
 /*
  * selfupdate.c - See selfupdate.h; app_swap is the --swap mode (step 4).
  *
- * Signer rule: if the running executable is Authenticode-signed and Windows accepts the
- * signature, the new one must be accepted too and have the same signer subject. If the running
- * one is signed but the signature does not verify on this machine (for example under Wine, see
- * platform/win32/trust.h), the new one must still carry a signature with the same subject. An
- * unsigned build (beta) only relies on the SHA-256 from the pinned status.
+ * Signer rule: an unsigned running executable (beta build) only relies on the SHA-256 from the
+ * pinned status. A signed one requires that both executables verify (platform/win32/trust.h:
+ * WinVerifyTrust with revocation of the whole chain checked online) and that the new signer's
+ * subject and issuer names equal ours. Anything else refuses the update, including a running
+ * executable that does not verify on this machine (revoked, tampered, revocation status
+ * unavailable because the machine is offline, or Wine without chain building): the current
+ * version keeps running and the update is retried on the next start.
  */
 #include "selfupdate.h"
 #include "app.h"
@@ -23,11 +25,11 @@
 #define SWAP_WAIT_MS 60000u
 #define SWAP_RETRIES 40u
 #define SWAP_RETRY_MS 250u
-#define SUBJECT_BYTES 256
+#define SWAP_LOCK_MS 10000u /* another launcher holding the folder after the old one exited */
 
 static uint8_t g_exe[APP_BLOB_MAX];
 static char g_self[FS_PATH_BYTES], g_new[FS_PATH_BYTES], g_target[FS_PATH_BYTES];
-static char g_own_subject[SUBJECT_BYTES], g_new_subject[SUBJECT_BYTES];
+static trust_signer g_own_signer, g_new_signer;
 
 static int new_path(char *out, size_t cap)
 {
@@ -49,16 +51,21 @@ int selfupdate_available(void)
            cmp > 0;
 }
 
-static void log_trust(const char *who, trust_result r, const char *subject)
+static void log_trust(const char *who, trust_result r, const trust_signer *signer)
 {
     strbuf *sb = log_begin();
     sb_add(sb, "self-update: ");
     sb_add(sb, who);
     sb_add(sb, " executable ");
     sb_add(sb, trust_result_text(r));
-    if (subject[0]) {
+    if (signer->subject[0]) {
         sb_add(sb, ", signer \"");
-        sb_add(sb, subject);
+        sb_add(sb, signer->subject);
+        sb_add(sb, "\"");
+    }
+    if (signer->issuer[0]) {
+        sb_add(sb, ", issuer \"");
+        sb_add(sb, signer->issuer);
         sb_add(sb, "\"");
     }
     log_end();
@@ -68,17 +75,17 @@ static int signer_accepted(void)
 {
     trust_result own, next;
     if (!fs_exe_name(g_target, sizeof g_target) || !fs_join(g_self, sizeof g_self, app_dir, g_target)) return 0;
-    own = trust_check(g_self, g_own_subject, sizeof g_own_subject);
-    next = trust_check(g_new, g_new_subject, sizeof g_new_subject);
-    log_trust("running", own, g_own_subject);
-    log_trust("new", next, g_new_subject);
+    own = trust_check(g_self, &g_own_signer);
+    next = trust_check(g_new, &g_new_signer);
+    log_trust("running", own, &g_own_signer);
+    log_trust("new", next, &g_new_signer);
     /* Unsigned build: the SHA-256 from the pinned server is the only check (as for any blob).
-     * Signed build: the new exe must verify too and come from the same signer. If our own
-     * signature can't be verified (revoked, tampered, or Wine without chain building) the
-     * update is refused: we keep running the current version. */
+     * Signed build: both must verify (revocation checked online; unknown status = not verified)
+     * and the new signer must have the same subject and issuer. Otherwise we keep running the
+     * current version. */
     if (own == TRUST_UNSIGNED) return 1;
     if (own != TRUST_VALID || next != TRUST_VALID) return 0;
-    return g_own_subject[0] && str_eq(g_own_subject, g_new_subject);
+    return str_eq(g_own_signer.subject, g_new_signer.subject) && str_eq(g_own_signer.issuer, g_new_signer.issuer);
 }
 
 int selfupdate_start(void)
@@ -104,7 +111,7 @@ int selfupdate_start(void)
         return 0;
     }
     if (!signer_accepted()) {
-        log_line("error: self-update: the new executable's signer does not match; keeping this version");
+        log_line("error: self-update: signature check failed (see above); keeping this version");
         fs_remove(g_new);
         return 0;
     }
@@ -167,12 +174,17 @@ int app_swap(void)
         app_end();
         return 1;
     }
-    for (i = 0; i < SWAP_RETRIES && !moved; i++) {
-        moved = fs_rename(g_new, g_self);
-        if (!moved) thread_sleep(SWAP_RETRY_MS);
+    /* Hold the folder while replacing, so no launcher started meanwhile runs from (or deletes)
+     * the files being swapped; the old one has exited, so this only waits for a stray one. */
+    if (app_lock(SWAP_LOCK_MS)) {
+        for (i = 0; i < SWAP_RETRIES && !moved; i++) {
+            moved = fs_rename(g_new, g_self);
+            if (!moved) thread_sleep(SWAP_RETRY_MS);
+        }
     }
     log_line(moved ? "swap: replaced the launcher " LAUNCHER_VERSION
                    : "error: swap: cannot replace the launcher; starting the old one");
-    app_end(); /* the started launcher opens launcher.log itself */
+    app_unlock(); /* before the launch: the started launcher must be able to take the folder */
+    app_end();    /* the started launcher opens launcher.log itself */
     return proc_launch(g_self, args, 1, app_dir) ? 0 : 1;
 }

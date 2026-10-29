@@ -33,6 +33,15 @@ extern launcher_status app_status;
 int app_begin(const char *mode);
 void app_end(void);
 
+/* Single instance per folder (platform/win32/instance.h), after app_begin. Waits up to wait_ms
+ * for the holder. Returns 1 if this process holds the folder, or if the lock itself failed
+ * (logged; refusing to start over a missing mutex would be worse); 0 if another launcher
+ * holds it. */
+int app_lock(uint32_t wait_ms);
+
+/* Lets the next launcher take the folder (before starting it); the exit also does. */
+void app_unlock(void);
+
 int app_load_config(void);
 
 /* GET /v1/status into app_status (logged). The raw document stays available until the next

@@ -52,14 +52,11 @@ int fs_open_read(fs_file *f, const char *path)
     return open_file(f, path, GENERIC_READ, FILE_SHARE_READ, OPEN_EXISTING);
 }
 
+/* Append-only access: every write lands at the current end of the file, so two launchers (one of
+ * them refused by the single-instance lock) can log to the same file without overwriting lines. */
 int fs_open_append(fs_file *f, const char *path)
 {
-    if (!open_file(f, path, GENERIC_WRITE, FILE_SHARE_READ, OPEN_ALWAYS)) return 0;
-    if (!SetFilePointerEx(f->handle, 0, 0, FILE_END)) {
-        fs_close(f);
-        return 0;
-    }
-    return 1;
+    return open_file(f, path, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, OPEN_ALWAYS);
 }
 
 int fs_create(fs_file *f, const char *path)

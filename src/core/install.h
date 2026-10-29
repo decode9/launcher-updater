@@ -12,6 +12,10 @@
  *      the half-done patch of an interrupted install and the applied patches of the previous
  *      release alike (truncate to the base size, restore old bytes in reverse order). Releases
  *      are always applied from the base.
+ *      Then deletes the managed files the manifest no longer mentions (and their "<path>.part")
+ *      and forgets them: delete, forget, save, so a killed run repeats it harmlessly. Only files
+ *      listed in the state are deleted, and not one whose size changed since it was recorded
+ *      (someone else wrote it): that one is only forgotten. The state never outgrows a manifest.
  *   3. Plans: decides which `file` ops are already present (state entry with the same
  *      sha256 + size and the same size on disk, or else one full hash) and how many bytes are
  *      missing; fails with INSTALL_ERR_SPACE before downloading if the disk is too full.
@@ -26,8 +30,7 @@
  *               so the next release can return to the base.
  *      line  -> lineop.h on the whole text (at most INSTALL_TEXT_MAX bytes), written to a
  *               temporary file and renamed over the target.
- *   5. Records the release version in state.json and forgets files the manifest no longer
- *      mentions.
+ *   5. Records the release version in state.json.
  * Everything the engine keeps lives in .launcher/ (state.json, journals, temporary files)
  * except the "<path>.part" downloads, which sit next to their target so the rename is atomic.
  *
@@ -91,7 +94,8 @@ typedef struct {
 /* ---- progress --------------------------------------------------------------------------- */
 
 typedef enum {
-    INSTALL_PHASE_RECOVER = 0, /* undoing patch journals; done/total = journals */
+    INSTALL_PHASE_RECOVER = 0, /* undoing patch journals (done/total = journals), then deleting
+                                  files no longer in the release (done/total = state entries) */
     INSTALL_PHASE_VERIFY,      /* hashing one file; done/total = bytes of that file */
     INSTALL_PHASE_DOWNLOAD,    /* done/total = bytes of the whole download plan */
     INSTALL_PHASE_PATCH,       /* applying a patch; done/total = ops */

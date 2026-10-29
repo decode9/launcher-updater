@@ -6,6 +6,7 @@
 #include "core/manifest.h"
 #include "log.h"
 #include "platform/win32/http.h"
+#include "platform/win32/instance.h"
 #include "platform/win32/install_port.h"
 #include "platform/win32/rt.h"
 #include "platform/win32/sys.h"
@@ -190,6 +191,25 @@ int app_begin(const char *mode)
     }
     log_end();
     return 1;
+}
+
+int app_lock(uint32_t wait_ms)
+{
+    switch (instance_acquire(app_dir, wait_ms)) {
+    case INSTANCE_OK:
+        return 1;
+    case INSTANCE_BUSY:
+        log_line("another launcher is working in this folder");
+        return 0;
+    default:
+        log_line("warning: cannot create the single-instance lock; continuing without it");
+        return 1;
+    }
+}
+
+void app_unlock(void)
+{
+    instance_release();
 }
 
 void app_end(void)
@@ -418,9 +438,11 @@ int app_install(void)
 {
     int code;
     if (!app_begin("--install")) return 1;
-    if (!app_load_config()) code = 1;
+    if (!app_lock(0)) code = APP_EXIT_BUSY;
+    else if (!app_load_config()) code = 1;
     else if (!app_fetch_status()) code = 2;
     else code = app_install_release(0, 0, 0, 0);
+    app_unlock();
     app_end();
     return code;
 }

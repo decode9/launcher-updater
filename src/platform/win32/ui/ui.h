@@ -53,6 +53,10 @@ typedef struct {
     void *blob_ctx;
     ui_action_fn on_action; /* may be 0 */
     void *action_ctx;
+    /* Single-instance key (platform/win32/instance.h): the window class is named after it so
+     * ui_bring_to_front finds this folder's launcher and no other. 0 or "" = a plain class
+     * (theme preview). */
+    const char *instance_key;
 } ui_config;
 
 /* Upper bound of one blob the window loads (images and font files). */
@@ -61,6 +65,11 @@ typedef struct {
 /* Starts GDI+, creates the window for theme (copied: the caller may drop it) in state
  * checking, and shows it. Returns 1, or 0 if GDI+ or the window could not be created. */
 int ui_create(const theme_model *theme, const ui_config *cfg);
+
+/* Restores (if minimized) and activates the window another launcher created with this
+ * instance_key. Needs no ui_create. Returns 1 if such a window exists (it may still be refused
+ * the foreground by Windows), 0 if not (that launcher has no window: --install, --swap). */
+int ui_bring_to_front(const char *instance_key);
 
 /* Runs the message loop until the window is closed; returns 0. Shuts GDI+ down. */
 int ui_run(void);

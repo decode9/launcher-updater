@@ -1,10 +1,16 @@
 /*
- * sys.h - Process-level services: command line, user interface language, UTC clock, exit.
+ * sys.h - Process-level services: DLL search hardening, command line, user interface language, UTC clock, exit.
  */
 #ifndef LAUNCHER_SYS_H
 #define LAUNCHER_SYS_H
 
 #include <stddef.h>
+
+/* Restricts the DLLs Windows loads later at run time (LoadLibrary calls, and the providers that
+ * system DLLs such as Schannel, wintrust and GDI+ load on demand) to System32, so a DLL planted
+ * next to the exe is never picked up. The static imports are covered by the PE load config
+ * (loadcfg.c, /dependentloadflag). Best effort: never fails, call it first in entry(). */
+void sys_harden_dll_search(void);
 
 /* 1 if one of the command-line arguments (after the program name) equals flag (ASCII). */
 int sys_has_flag(const char *flag);

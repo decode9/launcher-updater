@@ -97,19 +97,31 @@ from `launcher.json`.
   capped at 8 MiB).
 - **Releases from the base**: when the version changes, the launcher undoes its journals (back
   to the base) and applies the new manifest in full.
+- **Files no longer in the release**: right after undoing the journals and before downloading,
+  the launcher deletes every file it delivered whole with a `file` op of an earlier release
+  (even if a later `patch` or `line` op edited it) whose path the new manifest does not mention,
+  together with its `<path>.part`, and then forgets it. Files the launcher only edited with a
+  `patch` or `line` op, without ever delivering them with a `file` op (e.g. a settings file the
+  game created), are only forgotten (their `<path>.part` is still deleted); files the launcher
+  never touched (saves, mods, user settings) are never deleted either. A delivered file whose
+  size changed since the launcher wrote it is only forgotten, not deleted. Deleting comes before
+  forgetting, so an interrupted run repeats it.
 - **Journal**: before appending, the base size is saved; before each in-place write, the old
   bytes (flushed to disk). On start, the journal of a half-finished install is undone first.
   Undo = truncate to the base size, then restore the old bytes in reverse order (idempotent).
 - **Launcher state** (informative, not part of the wire contract): `.launcher/state.json` holds
   the installed release and the SHA-256/size of each managed file; a file whose entry matches
-  and whose size on disk is unchanged is not hashed again. The same release with all sizes
-  unchanged means there is nothing to do.
+  and whose size on disk is unchanged is not hashed again. An entry carries `"owned": true` when
+  a `file` op delivered the file (only those may be deleted later); the member is optional and
+  absent means not owned, so state files from earlier launchers keep loading. The same release
+  with all sizes unchanged means there is nothing to do.
 
 ## Launcher flow
 Informative (behaviour of this launcher, not part of the wire contract). Started without
 arguments, the launcher opens its window with the cached theme (`.launcher/cache/theme.json`
 and its blobs, each named by its SHA-256 and verified when loaded) or the built-in neutral
-theme, in state `checking`. One worker thread then does every request in series:
+theme, in state `checking` (if another launcher already runs from the same folder, it brings that
+window to the front and exits instead). One worker thread then does every request in series:
 
 1. `GET /v1/status`; the document is cached as `.launcher/cache/status.json`.
 2. Self-update when `launcher.version` is greater than its own (below).
@@ -144,12 +156,22 @@ When `launcher.version` in `/v1/status` is greater (X.Y.Z) than the running vers
 
 1. Download the `launcher` blob; its size and SHA-256 must match the pinned status.
 2. Write it as `<exe>.new` next to the executable (through `.part` and a rename).
-3. Signer: if the running executable has an Authenticode signature that Windows accepts, the
-   new one must also be accepted and have the same signer subject. If the running one is
-   signed but its signature does not verify on this machine (revoked, tampered, or Wine,
-   whose `WinVerifyTrust` does not build chains), the update is refused and the current
-   version keeps running. If the running one is unsigned (beta builds), the SHA-256 from the
-   pinned server is the only check.
+3. Signer. If the running executable is unsigned (beta builds), the SHA-256 from the pinned
+   status is the only check. If it carries an Authenticode signature, both executables are
+   checked with `WinVerifyTrust` (no UI; revocation of every certificate in the chain except
+   the root, with CRL/OCSP lookups over the network) and the update goes ahead only if both
+   are accepted **and** the new signer certificate has the same full subject and the same
+   full issuer distinguished names as the running one. Anything else refuses the update:
+   a signature that is tampered with or revoked, a revocation status that cannot be obtained
+   (the machine is offline or the CRL/OCSP server is unreachable: the check fails closed),
+   or Wine, whose `WinVerifyTrust` does not build chains. The current version keeps running
+   (the game stays playable) and the update is tried again on the next start.
+
+   Limitation: the signer check proves "signed by the same entity with a certificate from the
+   same CA", not "built by this project". With SignPath Foundation's free certificate the
+   signer is SignPath Foundation for every project it signs, so another project signed by it
+   would pass this step. The main protection remains the SHA-256 (and size) from the status,
+   which is fetched over the pinned TLS connection; the signature is a second layer.
 4. Start `<exe>.new --swap <pid>` and exit.
 5. The new process waits for `<pid>` to exit (up to 60 s), renames itself over `<exe>`
    (40 attempts, 250 ms apart), starts `<exe> --skip-update` and exits. `--skip-update` limits

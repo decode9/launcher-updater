@@ -31,3 +31,5 @@ EXPORTS
     ScreenToClient@8
     GetSystemMetrics@4
     SetForegroundWindow@4
+    FindWindowW@8
+    IsIconic@4

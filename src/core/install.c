@@ -454,7 +454,7 @@ static install_error download_file(const release_manifest *m, const manifest_op 
         return INSTALL_ERR_CORRUPT;
     }
     if (!cx->fs->rename(cx->fs->user, part, path)) return INSTALL_ERR_IO;
-    if (!state_set(&state, path, op->target.sha256, op->target.size)) return INSTALL_ERR_STATE;
+    if (!state_set_owned(&state, path, op->target.sha256, op->target.size, 1)) return INSTALL_ERR_STATE;
     return save_state();
 }
 
@@ -563,6 +563,8 @@ static install_error apply_patch(const release_manifest *m, const manifest_op *o
     char tmp[128], name[64];
     uint64_t size;
     size_t len;
+    const state_file *known;
+    int owned;
     install_error e = INSTALL_OK;
     /* 1. The file must be the base; nothing is touched otherwise. */
     if (!path_size(path, &size) || size != op->base.size) return INSTALL_ERR_BASE;
@@ -582,6 +584,10 @@ static install_error apply_patch(const release_manifest *m, const manifest_op *o
     if (e) return e;
     journal_name(path, name);
     if (!write_whole(name, scratch, len)) return INSTALL_ERR_IO;
+    /* Patching never changes who created the file. A crash from here on loses the flag (the
+     * entry is forgotten): the file is then kept when it leaves the release, never deleted. */
+    known = state_find(&state, path);
+    owned = known && known->owned;
     state_forget(&state, path);
     if (!state_add_journal(&state, path)) return INSTALL_ERR_STATE;
     e = save_state();
@@ -598,7 +604,7 @@ static install_error apply_patch(const release_manifest *m, const manifest_op *o
     }
     /* 5. Keep the journal (applied) for the return to the base on the next release. */
     if (!mark_applied(name)) return INSTALL_ERR_IO;
-    if (!state_set(&state, path, op->target.sha256, op->target.size)) return INSTALL_ERR_STATE;
+    if (!state_set_owned(&state, path, op->target.sha256, op->target.size, owned)) return INSTALL_ERR_STATE;
     e = save_state();
     if (!e) cx->fs->remove(cx->fs->user, tmp);
     report(INSTALL_PHASE_PATCH, path, 1, 1, 1);
@@ -653,10 +659,11 @@ static install_error plan(const release_manifest *m, uint64_t *need)
                     present[k] = 1;
                 } else if (file_is(path, &op->target, &e)) {
                     present[k] = 1;
-                    if (!state_set(&state, path, op->target.sha256, size)) return INSTALL_ERR_STATE;
                 } else if (e) {
                     return e;
                 }
+                /* A file op delivers the whole content: the file is the launcher's from now on. */
+                if (present[k] && !state_set_owned(&state, path, op->target.sha256, size, 1)) return INSTALL_ERR_STATE;
             }
             if (!present[k]) {
                 /* Only whole chunks in .part are kept on resume. */
@@ -676,14 +683,47 @@ static install_error plan(const release_manifest *m, uint64_t *need)
     return save_state();
 }
 
-static void prune(const release_manifest *m)
+/* ---- orphans ---------------------------------------------------------------------------- */
+
+static int in_manifest(const release_manifest *m, const char *path)
 {
-    uint32_t i = state.file_count, k;
+    uint32_t k;
+    for (k = 0; k < m->op_count; k++)
+        if (manifest_path_eq(manifest_str(m, m->ops[k].path), path)) return 1;
+    return 0;
+}
+
+/* Deletes the managed files (and their "<path>.part") that m no longer mentions, then forgets
+ * them. Delete -> forget -> save: a run killed half way repeats the deletions harmlessly. Only
+ * paths listed in the state are touched, never a reserved one. A file is deleted only when a
+ * `file` op delivered it (owned) and its size is the recorded one; one the launcher only edited
+ * (patch/line on the user's file) or that someone else changed (the game, the user) is only
+ * forgotten. The .part is always the launcher's own temporary and is deleted. */
+static install_error retire_orphans(const release_manifest *m)
+{
+    char part[AUX_BYTES];
+    uint32_t i = state.file_count, total = state.file_count;
+    uint64_t size;
+    int changed = 0;
     while (i-- > 0) {
-        int used = 0;
-        for (k = 0; k < m->op_count && !used; k++) used = manifest_path_eq(manifest_str(m, m->ops[k].path), state.files[i].path);
-        if (!used) state_forget(&state, state.files[i].path);
+        const state_file *f = &state.files[i];
+        if (in_manifest(m, f->path)) continue;
+        if (!manifest_path_is_reserved(f->path, cx->self_exe)) {
+            if (cancelled()) return INSTALL_ERR_CANCELLED;
+            str_copy(res->path, sizeof res->path, f->path);
+            report(INSTALL_PHASE_RECOVER, f->path, total - i, total, 1);
+            if (f->owned && (!path_size(f->path, &size) || size == f->size)) {
+                if (!cx->fs->remove(cx->fs->user, f->path)) return INSTALL_ERR_IO;
+            }
+            /* "<path>.part" may itself be a file of the new release (path.h allows it). */
+            if (!join_suffix(part, f->path, ".part")) return INSTALL_ERR_IO;
+            if (!in_manifest(m, part) && !cx->fs->remove(cx->fs->user, part)) return INSTALL_ERR_IO;
+        }
+        state_forget(&state, f->path);
+        changed = 1;
     }
+    res->path[0] = 0;
+    return changed ? save_state() : INSTALL_OK;
 }
 
 /* ---- entry points ----------------------------------------------------------------------- */
@@ -702,6 +742,7 @@ static install_error run(const release_manifest *m)
     state.release[0] = 0;
     e = save_state();
     if (!e) e = recover();
+    if (!e) e = retire_orphans(m);
     if (!e) e = plan(m, &need);
     if (e) return e;
     if (cx->fs->free_space(cx->fs->user, &free_bytes) && free_bytes < need + INSTALL_SPACE_MARGIN) {
@@ -725,7 +766,6 @@ static install_error run(const release_manifest *m)
     }
     res->op = -1;
     res->path[0] = 0;
-    prune(m);
     if (!str_copy(state.release, sizeof state.release, m->version)) return INSTALL_ERR_STATE;
     e = save_state();
     if (!e) cx->fs->remove(cx->fs->user, LINE_TMP);

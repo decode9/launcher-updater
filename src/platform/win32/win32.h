@@ -27,6 +27,7 @@ typedef long long LONGLONG;
 #define FILE_SHARE_READ 1
 #define FILE_SHARE_WRITE 2
 #define FILE_SHARE_DELETE 4
+#define FILE_APPEND_DATA 4 /* access right: writes always go to the end of the file */
 #define CREATE_ALWAYS 2
 #define OPEN_EXISTING 3
 #define OPEN_ALWAYS 4
@@ -64,6 +65,8 @@ IMPORT BOOL WINAPI DeleteFileW(const wchar_t *);
 IMPORT BOOL WINAPI GetDiskFreeSpaceExW(const wchar_t *, LONGLONG *, LONGLONG *, LONGLONG *);
 IMPORT void WINAPI GetSystemTime(SYSTEMTIME *);
 IMPORT DWORD WINAPI GetTickCount(void);
+IMPORT HANDLE WINAPI GetModuleHandleW(const wchar_t *);
+IMPORT void *WINAPI GetProcAddress(HANDLE, const char *);
 IMPORT int WINAPI MultiByteToWideChar(unsigned, DWORD, const char *, int, wchar_t *, int);
 IMPORT int WINAPI WideCharToMultiByte(unsigned, DWORD, const wchar_t *, int, char *, int, const char *, BOOL *);
 IMPORT int WINAPI GetLocaleInfoW(DWORD, DWORD, wchar_t *, int);

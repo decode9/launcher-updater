@@ -8,12 +8,17 @@
  * Returns 0 status read, 1 configuration error, 2 network/server error. */
 int app_run(int status_only);
 
+/* Exit code of --install when another launcher holds this folder (platform/win32/instance.h). */
+#define APP_EXIT_BUSY 4
+
 /* launcher.exe --install: status, then the release manifest, then the install engine
  * (core/install.h), logging progress to launcher.log. Returns 0 installed (or already current),
- * 1 configuration error, 2 network/server error, 3 install error. */
+ * 1 configuration error, 2 network/server error, 3 install error, APP_EXIT_BUSY another
+ * launcher is working in this folder (nothing done). */
 int app_install(void);
 
-/* launcher.exe (no arguments): the themed window (window.c). */
+/* launcher.exe (no arguments): the themed window (window.c). If another launcher holds this
+ * folder, brings its window to the front and returns 0 without creating one. */
 int app_window(void);
 
 /* launcher.exe --swap <pid>: second half of self-update (selfupdate.c). */
